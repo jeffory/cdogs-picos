@@ -6,6 +6,9 @@ cdogs-sdl-editor
 cdogs-sdl.opk
 # tests
 *_test
+*.debug
+main.elf
+main_stripped.elf
 
 # CMake stuff
 *CMakeCache.txt

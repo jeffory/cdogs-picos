@@ -1,0 +1,8 @@
+{
+    "id": "com.picos.cdogs",
+    "name": "C-Dogs",
+    "description": "Classic overhead run-and-gun game",
+    "type": "native",
+    "version": "0.0.1",
+    "requirements": ["root-filesystem", "audio"]
+}
