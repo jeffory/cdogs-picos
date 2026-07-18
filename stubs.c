@@ -10,8 +10,10 @@
 #include <stdint.h>
 #include <string.h>
 #include <setjmp.h>
+#include <malloc.h>
 #include "os.h"
 #include "dirent.h"
+#include "picos_heap.h"
 
 extern const PicoCalcAPI *g_picos_api;
 extern char g_app_dir[128];
@@ -28,9 +30,27 @@ static uint8_t g_heap[HEAP_SIZE] __attribute__((aligned(8)));
 static uint8_t *g_heap_ptr = g_heap;
 
 /* Remaining never-allocated heap (sbrk watermark; freed blocks recycled by
- * newlib malloc are not visible here, so this is a conservative floor). */
+ * newlib malloc are not visible here, so this is a conservative floor).
+ * Semantics are load-bearing for the LoadImgToSurface reserve guard —
+ * see picos_heap.h before changing. */
 size_t picos_heap_free(void) {
     return (size_t)((g_heap + HEAP_SIZE) - g_heap_ptr);
+}
+
+size_t picos_heap_free_true(void) {
+    struct mallinfo mi = mallinfo();
+    return (size_t)((g_heap + HEAP_SIZE) - g_heap_ptr) + (size_t)mi.fordblks;
+}
+
+void picos_heap_report(const char *tag) {
+    struct mallinfo mi = mallinfo();
+    const size_t watermark = (size_t)((g_heap + HEAP_SIZE) - g_heap_ptr);
+    fprintf(stderr, "HEAPSTAT %s watermark=%u true=%u arena=%u used=%u\n",
+            tag,
+            (unsigned)watermark,
+            (unsigned)(watermark + (size_t)mi.fordblks),
+            (unsigned)mi.arena,
+            (unsigned)mi.uordblks);
 }
 
 /* OS tick during bulk asset loading: feeds the hardware watchdog and keeps
@@ -41,12 +61,19 @@ size_t picos_heap_free(void) {
  * the watchdog without needing per-loop instrumentation in game code. */
 void picos_asset_load_tick(void) {
     static uint32_t s_last_tick_ms = 0;
+    static uint32_t s_last_report_ms = 0;
     if (!g_picos_api || !g_picos_api->sys)
         return;
     uint32_t now = g_picos_api->sys->getTimeMs();
     if (now - s_last_tick_ms < 500)
         return;
     s_last_tick_ms = now;
+    /* Report on a slower cadence than the watchdog tick: mallinfo() walks
+     * the free list, so it is O(free blocks) and not worth doing at 2Hz. */
+    if (now - s_last_report_ms >= 5000) {
+        s_last_report_ms = now;
+        picos_heap_report("load");
+    }
     g_picos_api->sys->poll();
 }
 
