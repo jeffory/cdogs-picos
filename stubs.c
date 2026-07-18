@@ -42,15 +42,31 @@ size_t picos_heap_free_true(void) {
     return (size_t)((g_heap + HEAP_SIZE) - g_heap_ptr) + (size_t)mi.fordblks;
 }
 
+/* High-water mark of bytes ever in use (sbrk watermark, i.e. g_heap_ptr -
+ * g_heap). Sampled on every successful _sbrk() growth so it captures peaks
+ * between report ticks, not just whatever happens to be current at report
+ * time. See heap_peak_sample() below. */
+static size_t s_heap_used_peak = 0;
+
+/* Cheap sample-and-update of the peak tracker. Deliberately does NOT call
+ * mallinfo() — this runs on the _sbrk() hot path (every malloc that grows
+ * the heap), so it must stay O(1). */
+static void heap_peak_sample(void) {
+    const size_t used = (size_t)(g_heap_ptr - g_heap);
+    if (used > s_heap_used_peak) s_heap_used_peak = used;
+}
+
 void picos_heap_report(const char *tag) {
     struct mallinfo mi = mallinfo();
     const size_t watermark = (size_t)((g_heap + HEAP_SIZE) - g_heap_ptr);
-    fprintf(stderr, "HEAPSTAT %s watermark=%u true=%u arena=%u used=%u\n",
+    heap_peak_sample();
+    fprintf(stderr, "HEAPSTAT %s watermark=%u true=%u arena=%u used=%u peak=%u\n",
             tag,
             (unsigned)watermark,
             (unsigned)(watermark + (size_t)mi.fordblks),
             (unsigned)mi.arena,
-            (unsigned)mi.uordblks);
+            (unsigned)mi.uordblks,
+            (unsigned)s_heap_used_peak);
 }
 
 /* OS tick during bulk asset loading: feeds the hardware watchdog and keeps
@@ -69,8 +85,11 @@ void picos_asset_load_tick(void) {
         return;
     s_last_tick_ms = now;
     /* Report on a slower cadence than the watchdog tick: mallinfo() walks
-     * the free list, so it is O(free blocks) and not worth doing at 2Hz. */
-    if (now - s_last_report_ms >= 5000) {
+     * the free list, so it is O(free blocks) and not worth doing at 2Hz.
+     * 1000ms (not lower) balances catching short bursts of allocation
+     * against that cost — see heap_peak_sample() for how the peak is
+     * still captured between ticks regardless of this cadence. */
+    if (now - s_last_report_ms >= 1000) {
         s_last_report_ms = now;
         picos_heap_report("load");
     }
@@ -86,6 +105,7 @@ void * _sbrk(ptrdiff_t incr) {
         return (void *)-1;
     }
     g_heap_ptr += incr;
+    heap_peak_sample();
     return prev_ptr;
 }
 

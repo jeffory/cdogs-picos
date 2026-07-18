@@ -22,7 +22,10 @@ size_t picos_heap_free(void);
 size_t picos_heap_free_true(void);
 
 /* Emit one HEAPSTAT line to stderr:
-     HEAPSTAT <tag> watermark=<u> true=<u> arena=<u> used=<u> */
+     HEAPSTAT <tag> watermark=<u> true=<u> arena=<u> used=<u> peak=<u>
+   peak is the high-water mark of bytes ever in use, tracked internally in
+   stubs.c and sampled on every _sbrk() growth — not just at report time —
+   so it survives between report ticks regardless of cadence. */
 void picos_heap_report(const char *tag);
 
 #endif /* PICOS_HEAP_H */
