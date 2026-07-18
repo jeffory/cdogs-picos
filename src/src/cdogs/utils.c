@@ -723,12 +723,11 @@ SDL_Surface *LoadImgToSurface(const char *path)
 	   late init. picos_heap_free() is declared in picos_heap.h (included
 	   above) — see that header before touching its semantics. */
 	enum { IMG_LOAD_HEAP_RESERVE = 2560 * 1024 };
-	static int skip_count = 0;
 	if (picos_heap_free() < IMG_LOAD_HEAP_RESERVE) {
-		skip_count++;
-		if (skip_count <= 5 || skip_count % 100 == 0) {
+		g_picos_img_skip_count++;
+		if (g_picos_img_skip_count <= 5 || g_picos_img_skip_count % 100 == 0) {
 			fprintf(stderr, "LoadImg SKIP #%d (heap reserve): '%s'\n",
-					skip_count, path);
+					g_picos_img_skip_count, path);
 		}
 		return NULL;
 	}

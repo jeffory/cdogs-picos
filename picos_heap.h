@@ -31,4 +31,31 @@ size_t picos_heap_free_true(void);
    the current arena size after newlib trims the heap. */
 void picos_heap_report(const char *tag);
 
+/* Live resident-graphics accounting, maintained by pic.c. */
+extern size_t g_picos_pic_data_bytes;
+extern size_t g_picos_pic_tex_bytes;
+extern int    g_picos_pic_count;
+/* High-water mark of (data+tex). Updated via picos_gfx_bytes_peak_sample()
+   below wherever either byte counter increases — a cheap comparison on
+   pic.c's allocation hot path, no allocation of its own. Unlike an
+   instantaneous sample at report time, this cannot land between two
+   report ticks and miss a load that both starts and finishes inside the
+   gap (empirically, C-Dogs' boot-time asset scan at the idle main menu
+   does exactly that against picos_asset_load_tick's report cadence). */
+extern size_t g_picos_pic_bytes_peak;
+/* Images refused by the LoadImgToSurface reserve guard. */
+extern int    g_picos_img_skip_count;
+
+static inline void picos_gfx_bytes_peak_sample(void) {
+    const size_t total = g_picos_pic_data_bytes + g_picos_pic_tex_bytes;
+    if (total > g_picos_pic_bytes_peak)
+    {
+        g_picos_pic_bytes_peak = total;
+    }
+}
+
+/* Emit one GFXSTAT line to stderr:
+     GFXSTAT <tag> pics=<d> data=<u> tex=<u> total=<u> peak=<u> skipped=<d> */
+void picos_gfx_report(const char *tag);
+
 #endif /* PICOS_HEAP_H */

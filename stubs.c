@@ -76,6 +76,26 @@ void picos_heap_report(const char *tag) {
             (unsigned)s_heap_used_peak);
 }
 
+/* Resident-graphics accounting.  Defined here rather than in pic.c so the
+ * symbols exist even in builds where pic.c is excluded. */
+size_t g_picos_pic_data_bytes = 0;
+size_t g_picos_pic_tex_bytes  = 0;
+size_t g_picos_pic_bytes_peak = 0;
+int    g_picos_pic_count      = 0;
+int    g_picos_img_skip_count = 0;
+
+void picos_gfx_report(const char *tag) {
+    const size_t total = g_picos_pic_data_bytes + g_picos_pic_tex_bytes;
+    fprintf(stderr, "GFXSTAT %s pics=%d data=%u tex=%u total=%u peak=%u skipped=%d\n",
+            tag,
+            g_picos_pic_count,
+            (unsigned)g_picos_pic_data_bytes,
+            (unsigned)g_picos_pic_tex_bytes,
+            (unsigned)total,
+            (unsigned)g_picos_pic_bytes_peak,
+            g_picos_img_skip_count);
+}
+
 /* OS tick during bulk asset loading: feeds the hardware watchdog and keeps
  * the dev console responsive while no frames are being rendered.  Rate-
  * limited because poll() includes an I2C keyboard read — ticking on every
@@ -99,6 +119,7 @@ void picos_asset_load_tick(void) {
     if (now - s_last_report_ms >= 1000) {
         s_last_report_ms = now;
         picos_heap_report("load");
+        picos_gfx_report("load");
     }
     g_picos_api->sys->poll();
 }

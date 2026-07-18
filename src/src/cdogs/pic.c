@@ -35,6 +35,10 @@
 #include "texture.h"
 #include "utils.h"
 
+#ifdef PICOS
+#include "picos_heap.h"
+#endif
+
 map_t textureDebugger = NULL;
 
 
@@ -83,6 +87,11 @@ void PicLoad(
 	{
 		return;
 	}
+#ifdef PICOS
+	g_picos_pic_data_bytes += (size_t)size.x * size.y * sizeof *p->Data;
+	g_picos_pic_count++;
+	picos_gfx_bytes_peak_sample();
+#endif
 	// Manually copy the pixels and replace the alpha component,
 	// since our gfx device format has no alpha
 	int srcI = offset.y*image->w + offset.x;
@@ -126,6 +135,13 @@ bool PicTryMakeTex(Pic *p)
 	if (p->Tex != NULL)
 	{
 		LOG(LM_GFX, LL_TRACE, "destroying texture %p data(%p)", p->Tex, p->Data);
+#ifdef PICOS
+		{
+			int texW = 0, texH = 0;
+			SDL_QueryTexture(p->Tex, NULL, NULL, &texW, &texH);
+			g_picos_pic_tex_bytes -= (size_t)texW * texH * sizeof(Uint32);
+		}
+#endif
 		SDL_DestroyTexture(p->Tex);
 		if (LL_TRACE >= LogModuleGetLevel(LM_GFX))
 		{
@@ -158,6 +174,10 @@ bool PicTryMakeTex(Pic *p)
 		LOG(LM_GFX, LL_ERROR, "cannot create texture: %s", SDL_GetError());
 		return false;
 	}
+#ifdef PICOS
+	g_picos_pic_tex_bytes += (size_t)size.x * size.y * sizeof(Uint32);
+	picos_gfx_bytes_peak_sample();
+#endif
 	if (SDL_UpdateTexture(
 		p->Tex, NULL, p->Data, size.x * sizeof(Uint32)) != 0)
 	{
@@ -196,6 +216,11 @@ Pic PicCopy(const Pic *src)
 	const size_t size = psize.x * psize.y * sizeof *p.Data;
 	CMALLOC(p.Data, size);
 	memcpy(p.Data, src->Data, size);
+#ifdef PICOS
+	g_picos_pic_data_bytes += size;
+	g_picos_pic_count++;
+	picos_gfx_bytes_peak_sample();
+#endif
 	p.Tex = NULL;
 	p.isHD = src->isHD;
 	return p;
@@ -206,6 +231,13 @@ void PicFree(Pic *pic)
 	if (pic->Tex != NULL)
 	{
 		LOG(LM_GFX, LL_TRACE, "freeing texture %p data(%p)", pic->Tex, pic->Data);
+#ifdef PICOS
+		{
+			int texW = 0, texH = 0;
+			SDL_QueryTexture(pic->Tex, NULL, NULL, &texW, &texH);
+			g_picos_pic_tex_bytes -= (size_t)texW * texH * sizeof(Uint32);
+		}
+#endif
 		SDL_DestroyTexture(pic->Tex);
 		if (LL_TRACE >= LogModuleGetLevel(LM_GFX))
 		{
@@ -229,6 +261,15 @@ void PicFree(Pic *pic)
 			}
 		}
 	}
+#ifdef PICOS
+	if (pic->Data != NULL)
+	{
+		const struct vec2i dataSize = PicPixelSize(pic);
+		g_picos_pic_data_bytes -=
+			(size_t)dataSize.x * dataSize.y * sizeof *pic->Data;
+		g_picos_pic_count--;
+	}
+#endif
 	pic->size = svec2i_zero();
 	CFREE(pic->Data);
 	pic->Data = NULL;
@@ -297,6 +338,15 @@ void PicShrink(Pic *pic, const struct vec2i size, const struct vec2i offset)
 		}
 	}
 	// Replace the old data
+#ifdef PICOS
+	{
+		const struct vec2i oldSize = PicPixelSize(pic);
+		g_picos_pic_data_bytes -=
+			(size_t)oldSize.x * oldSize.y * sizeof *pic->Data;
+		g_picos_pic_data_bytes += (size_t)size.x * size.y * sizeof *newData;
+		picos_gfx_bytes_peak_sample();
+	}
+#endif
 	CFREE(pic->Data);
 	pic->Data = newData;
 	pic->size = size;
