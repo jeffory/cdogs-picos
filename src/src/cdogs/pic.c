@@ -175,6 +175,16 @@ bool PicTryMakeTex(Pic *p)
 		return false;
 	}
 #ifdef PICOS
+	// This increment is only balanced by PicFree()'s matching decrement
+	// (query-before-destroy on pic->Tex, below). If PicTryMakeTex() fails on
+	// one of the two calls further down (SDL_UpdateTexture /
+	// SDL_SetTextureBlendMode), every caller (pic_manager.c) just does
+	// `Tex = NULL` instead of routing through PicFree(), orphaning both the
+	// SDL texture and this count. That's a pre-existing upstream leak, not
+	// introduced or fixed here — and unreachable in practice with the
+	// current PICOS SDL shim, since both of those calls only fail given a
+	// NULL texture or NULL pixel data, neither of which can be true for the
+	// Pic that just reached this line.
 	g_picos_pic_tex_bytes += (size_t)size.x * size.y * sizeof(Uint32);
 	picos_gfx_bytes_peak_sample();
 #endif
