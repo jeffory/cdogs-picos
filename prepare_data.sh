@@ -38,7 +38,15 @@ mkdir -p "$DATA_DIR"
 
 # --- Graphics (sprites, font, etc.) ---
 echo "Copying graphics..."
-rsync -a --info=progress2 "$SRC_DIR/graphics/" "$DATA_DIR/graphics/"
+# Blender sources and art-pipeline scripts are ~19MB and are never opened
+# at runtime; they also inflate directory entry counts during asset scans.
+RUNTIME_EXCLUDES=(
+    --exclude='*.blend' --exclude='*.blend1'
+    --exclude='render.py' --exclude='make_spritesheet.sh'
+    --exclude='src.txt' --exclude='README.md'
+)
+rsync -a --info=progress2 "${RUNTIME_EXCLUDES[@]}" \
+    "$SRC_DIR/graphics/" "$DATA_DIR/graphics/"
 echo "  Done: $(find "$DATA_DIR/graphics/" -name "*.png" | wc -l) PNG files"
 
 # --- JSON data files ---
@@ -58,12 +66,14 @@ echo "  Done: $(ls "$DATA_DIR/data/" | wc -l) files"
 
 # --- Sounds ---
 echo "Copying sounds..."
-rsync -a --info=progress2 "$SRC_DIR/sounds/" "$DATA_DIR/sounds/"
+rsync -a --info=progress2 "${RUNTIME_EXCLUDES[@]}" \
+    "$SRC_DIR/sounds/" "$DATA_DIR/sounds/"
 echo "  Done: $(find "$DATA_DIR/sounds/" -type f | wc -l) sound files"
 
 # --- Missions ---
 echo "Copying missions..."
-rsync -a --info=progress2 "$SRC_DIR/missions/" "$DATA_DIR/missions/"
+rsync -a --info=progress2 "${RUNTIME_EXCLUDES[@]}" \
+    "$SRC_DIR/missions/" "$DATA_DIR/missions/"
 echo "  Done: $(find "$DATA_DIR/missions/" -type f | wc -l) mission files"
 
 # --- Dogfights ---
