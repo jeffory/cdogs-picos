@@ -23,9 +23,12 @@ size_t picos_heap_free_true(void);
 
 /* Emit one HEAPSTAT line to stderr:
      HEAPSTAT <tag> watermark=<u> true=<u> arena=<u> used=<u> peak=<u>
-   peak is the high-water mark of bytes ever in use, tracked internally in
-   stubs.c and sampled on every _sbrk() growth — not just at report time —
-   so it survives between report ticks regardless of cadence. */
+   peak is the high-water mark of the sbrk arena (g_heap_ptr - g_heap),
+   tracked internally in stubs.c and sampled on every _sbrk() growth — not
+   just at report time — so it survives between report ticks regardless of
+   cadence. It is NOT the high-water mark of bytes-in-use (that's `used`,
+   above): peak >= arena >= used always holds, and peak only diverges from
+   the current arena size after newlib trims the heap. */
 void picos_heap_report(const char *tag);
 
 #endif /* PICOS_HEAP_H */

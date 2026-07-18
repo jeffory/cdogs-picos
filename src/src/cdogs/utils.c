@@ -74,6 +74,10 @@
 #include "log.h"
 #include "sys_config.h"
 
+#ifdef PICOS
+#include "picos_heap.h"
+#endif
+
 bool gTrue = true;
 bool gFalse = false;
 
@@ -716,8 +720,8 @@ SDL_Surface *LoadImgToSurface(const char *path)
 	   Pic data in PicManagerAdd (all outside this guard), and sounds,
 	   campaign scans, and menus still need to allocate after graphics.
 	   At a 1MB reserve the heap ended at 99.9% full and the app died in
-	   late init. */
-	extern size_t picos_heap_free(void);
+	   late init. picos_heap_free() is declared in picos_heap.h (included
+	   above) — see that header before touching its semantics. */
 	enum { IMG_LOAD_HEAP_RESERVE = 2560 * 1024 };
 	static int skip_count = 0;
 	if (picos_heap_free() < IMG_LOAD_HEAP_RESERVE) {

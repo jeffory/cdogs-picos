@@ -42,10 +42,13 @@ size_t picos_heap_free_true(void) {
     return (size_t)((g_heap + HEAP_SIZE) - g_heap_ptr) + (size_t)mi.fordblks;
 }
 
-/* High-water mark of bytes ever in use (sbrk watermark, i.e. g_heap_ptr -
- * g_heap). Sampled on every successful _sbrk() growth so it captures peaks
- * between report ticks, not just whatever happens to be current at report
- * time. See heap_peak_sample() below. */
+/* High-water mark of the sbrk arena (g_heap_ptr - g_heap) — NOT the
+ * high-water mark of bytes ever *in use*. peak >= arena >= used always
+ * holds; peak only diverges from the current arena size after newlib
+ * trims the heap (a negative-incr _sbrk() call). Sampled on every
+ * successful _sbrk() growth so it captures peaks between report ticks,
+ * not just whatever happens to be current at report time. See
+ * heap_peak_sample() below. */
 static size_t s_heap_used_peak = 0;
 
 /* Cheap sample-and-update of the peak tracker. Deliberately does NOT call
@@ -59,6 +62,10 @@ static void heap_peak_sample(void) {
 void picos_heap_report(const char *tag) {
     struct mallinfo mi = mallinfo();
     const size_t watermark = (size_t)((g_heap + HEAP_SIZE) - g_heap_ptr);
+    /* Belt-and-braces only: g_heap_ptr only ever moves inside _sbrk(),
+     * which already samples on every growth, so this call cannot change
+     * s_heap_used_peak here. Kept so the peak doesn't silently depend on
+     * _sbrk() being the sole caller if that ever changes. */
     heap_peak_sample();
     fprintf(stderr, "HEAPSTAT %s watermark=%u true=%u arena=%u used=%u peak=%u\n",
             tag,
@@ -98,6 +105,7 @@ void picos_asset_load_tick(void) {
 
 void * _sbrk(ptrdiff_t incr) {
     uint8_t *prev_ptr = g_heap_ptr;
+    if (g_heap_ptr + incr < g_heap) { errno = ENOMEM; return (void *)-1; }
     if (g_heap_ptr + incr > g_heap + HEAP_SIZE) {
         errno = ENOMEM;
         fprintf(stderr, "HEAP EXHAUSTED: need %d, used %d/%d\n",
