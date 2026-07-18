@@ -60,7 +60,15 @@ static inline int Mix_AllocateChannels(int n) { (void)n; return n; }
 static inline int Mix_Volume(int ch, int vol) { (void)ch; (void)vol; return 0; }
 static inline int Mix_VolumeMusic(int vol) { (void)vol; return 0; }
 
-static inline Mix_Chunk *Mix_LoadWAV_RW(SDL_RWops *src, int freesrc) { (void)src; (void)freesrc; return NULL; }
+/* Stubbed loaders must still honor the freesrc contract: Mix_LoadWAV opens
+ * the file via SDL_RWFromFile before calling these, and dropping the handle
+ * leaks an fd per sound — after 16 the fd table AND the firmware-wide FatFS
+ * lock table are exhausted, so every later open/listDir in the app fails
+ * (this broke CREDITS and the campaign scans). */
+static inline Mix_Chunk *Mix_LoadWAV_RW(SDL_RWops *src, int freesrc) {
+    if (src && freesrc) SDL_RWclose(src);
+    return NULL;
+}
 #define Mix_LoadWAV(file) Mix_LoadWAV_RW(SDL_RWFromFile(file, "rb"), 1)
 static inline Mix_Chunk *Mix_QuickLoad_RAW(Uint8 *mem, Uint32 len) { (void)mem; (void)len; return NULL; }
 static inline void Mix_FreeChunk(Mix_Chunk *chunk) { (void)chunk; }
@@ -78,9 +86,14 @@ static inline int Mix_SetDistance(int ch, Uint8 dist) { (void)ch; (void)dist; re
 static inline int Mix_SetPosition(int ch, Sint16 angle, Uint8 dist) { (void)ch; (void)angle; (void)dist; return 0; }
 
 static inline Mix_Music *Mix_LoadMUS(const char *file) { (void)file; return NULL; }
-static inline Mix_Music *Mix_LoadMUS_RW(SDL_RWops *src, int freesrc) { (void)src; (void)freesrc; return NULL; }
+static inline Mix_Music *Mix_LoadMUS_RW(SDL_RWops *src, int freesrc) {
+    if (src && freesrc) SDL_RWclose(src);
+    return NULL;
+}
 static inline Mix_Music *Mix_LoadMUSType_RW(SDL_RWops *src, Mix_MusicType type, int freesrc) {
-    (void)src; (void)type; (void)freesrc; return NULL;
+    (void)type;
+    if (src && freesrc) SDL_RWclose(src);
+    return NULL;
 }
 static inline void Mix_FreeMusic(Mix_Music *music) { (void)music; }
 static inline int Mix_PlayMusic(Mix_Music *music, int loops) { (void)music; (void)loops; return -1; }

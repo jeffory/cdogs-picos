@@ -723,7 +723,12 @@ static inline int SDL_SetSurfacePalette(SDL_Surface *s, SDL_Palette *p) { (void)
 extern SDL_Surface *SDL_ConvertSurfaceFormat(SDL_Surface *s, Uint32 f, Uint32 flags);
 extern SDL_Surface *SDL_LoadBMP_RW(SDL_RWops *src, int freesrc);
 #define SDL_LoadBMP(file) SDL_LoadBMP_RW(SDL_RWFromFile(file, "rb"), 1)
-static inline int SDL_SaveBMP_RW(SDL_Surface *s, SDL_RWops *d, int f) { (void)s; (void)d; (void)f; return -1; }
+extern int SDL_RWclose(SDL_RWops *c); /* declared again below with RWops API */
+static inline int SDL_SaveBMP_RW(SDL_Surface *s, SDL_RWops *d, int f) {
+    (void)s;
+    if (d && f) SDL_RWclose(d);
+    return -1;
+}
 #define SDL_SaveBMP(s, file) SDL_SaveBMP_RW(s, SDL_RWFromFile(file, "wb"), 1)
 
 /* Pixel manipulation — implemented */

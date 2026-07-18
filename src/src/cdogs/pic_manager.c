@@ -196,50 +196,74 @@ void PicManagerLoadDir(
 		goto bail;
 	}
 
-	for (; dir.has_next; tinydir_next(&dir))
+	/* PICOS: two passes — load this directory's files before recursing into
+	   subdirectories.  The SD returns entries in FAT (creation) order with
+	   the huge chars/ sprite tree first; with the image-load heap budget in
+	   LoadImgToSurface, a depth-first walk would spend the entire budget on
+	   character sprites before any top-level menu/UI pic is seen. */
+	for (int pass = 0; pass < 2; pass++)
 	{
-		tinydir_file file;
-		if (tinydir_readfile(&dir, &file) == -1)
+		if (pass == 1)
 		{
-			LOG(LM_MAIN, LL_ERROR, "Cannot read file '%s': %s", file.path,
-				strerror(errno));
-			goto bail;
-		}
-		if (file.is_reg && Stricmp(file.extension, "png") == 0)
-		{
-			SDL_Surface *data = LoadImgToSurface(file.path);
-			if (!data)
+			tinydir_close(&dir);
+			if (tinydir_open(&dir, path) == -1)
 			{
-				LOG(LM_MAIN, LL_ERROR, "Cannot load image");
+				goto bail;
 			}
-			else
+		}
+		for (; dir.has_next; tinydir_next(&dir))
+		{
+#ifdef PICOS
+			/* Each readfile stats via a FatFS file-open (linear directory
+			   scan) — hundreds of entries per pass take multiple seconds
+			   with no frame rendered, so feed the watchdog per entry. */
+			extern void picos_asset_load_tick(void);
+			picos_asset_load_tick();
+#endif
+			tinydir_file file;
+			if (tinydir_readfile(&dir, &file) == -1)
 			{
-				char buf[CDOGS_PATH_MAX];
-				if (prefix)
+				LOG(LM_MAIN, LL_ERROR, "Cannot read file '%s': %s", file.path,
+					strerror(errno));
+				goto bail;
+			}
+			if (pass == 0 && file.is_reg &&
+				Stricmp(file.extension, "png") == 0)
+			{
+				SDL_Surface *data = LoadImgToSurface(file.path);
+				if (!data)
 				{
-					char buf1[CDOGS_PATH_MAX];
-					sprintf(buf1, "%s/%s", prefix, file.name);
-					PathGetWithoutExtension(buf, buf1);
+					LOG(LM_MAIN, LL_ERROR, "Cannot load image");
 				}
 				else
 				{
-					PathGetBasenameWithoutExtension(buf, file.name);
+					char buf[CDOGS_PATH_MAX];
+					if (prefix)
+					{
+						char buf1[CDOGS_PATH_MAX];
+						sprintf(buf1, "%s/%s", prefix, file.name);
+						PathGetWithoutExtension(buf, buf1);
+					}
+					else
+					{
+						PathGetBasenameWithoutExtension(buf, file.name);
+					}
+					PicManagerAdd(pics, sprites, buf, data, isHD);
 				}
-				PicManagerAdd(pics, sprites, buf, data, isHD);
 			}
-		}
-		else if (file.is_dir && file.name[0] != '.')
-		{
-			if (prefix)
+			else if (pass == 1 && file.is_dir && file.name[0] != '.')
 			{
-				char buf[CDOGS_PATH_MAX];
-				sprintf(buf, "%s/%s", prefix, file.name);
-				PicManagerLoadDir(pm, file.path, buf, pics, sprites, isHD);
-			}
-			else
-			{
-				PicManagerLoadDir(
-					pm, file.path, file.name, pics, sprites, isHD);
+				if (prefix)
+				{
+					char buf[CDOGS_PATH_MAX];
+					sprintf(buf, "%s/%s", prefix, file.name);
+					PicManagerLoadDir(pm, file.path, buf, pics, sprites, isHD);
+				}
+				else
+				{
+					PicManagerLoadDir(
+						pm, file.path, file.name, pics, sprites, isHD);
+				}
 			}
 		}
 	}
@@ -271,6 +295,7 @@ static int MaybeAddKeyPicName(any_t data, any_t item);
 static int MaybeAddDoorPicName(any_t data, any_t item);
 static void AfterAdd(PicManager *pm)
 {
+	fprintf(stderr, "AfterAdd: enter\n");
 	FindStyleSprites(
 		pm, &pm->headPartNames[HEAD_PART_HAIR], MaybeAddHairSpriteName);
 	FindStyleSprites(
@@ -285,6 +310,7 @@ static void AfterAdd(PicManager *pm)
 	FindStylePics(pm, &pm->exitStyleNames, MaybeAddExitPicName);
 	FindStylePics(pm, &pm->doorStyleNames, MaybeAddDoorPicName);
 	FindStylePics(pm, &pm->keyStyleNames, MaybeAddKeyPicName);
+	fprintf(stderr, "AfterAdd: exit\n");
 }
 static int CompareStyleNames(const void *v1, const void *v2);
 static void StylesClear(CArray *styles)

@@ -700,6 +700,35 @@ end:
 
 SDL_Surface *LoadImgToSurface(const char *path)
 {
+#ifdef PICOS
+	/* The full decoded sprite set is far larger than the app heap (the PNG
+	   sources alone are 27MB); loading eagerly until malloc fails crashes
+	   the game on an unchecked allocation.  Keep a reserve for gameplay and
+	   skip images that no longer fit — PicManager treats a NULL surface as
+	   a soft failure. */
+	/* Bulk asset loading runs for many seconds with no frame rendered —
+	   nothing else feeds the hardware watchdog (8s), so a full-tree load
+	   reboots the device mid-decode.  The tick polls the OS (watchdog +
+	   serial console) between decodes. */
+	extern void picos_asset_load_tick(void);
+	picos_asset_load_tick();
+	/* 2.5MB reserve: loaded surfaces spawn same-size texture copies plus
+	   Pic data in PicManagerAdd (all outside this guard), and sounds,
+	   campaign scans, and menus still need to allocate after graphics.
+	   At a 1MB reserve the heap ended at 99.9% full and the app died in
+	   late init. */
+	extern size_t picos_heap_free(void);
+	enum { IMG_LOAD_HEAP_RESERVE = 2560 * 1024 };
+	static int skip_count = 0;
+	if (picos_heap_free() < IMG_LOAD_HEAP_RESERVE) {
+		skip_count++;
+		if (skip_count <= 5 || skip_count % 100 == 0) {
+			fprintf(stderr, "LoadImg SKIP #%d (heap reserve): '%s'\n",
+					skip_count, path);
+		}
+		return NULL;
+	}
+#endif
 	SDL_Surface *s = STBIMG_Load(path);
 #ifdef PICOS
 	static int img_count = 0;

@@ -267,6 +267,12 @@ static void LoadCampaignsFromFolder(
 
 	for (i = 0; i < (int)dir.n_files; i++)
 	{
+#ifdef PICOS
+		/* Campaign probing opens/parses files per entry with no frame
+		   rendered — feed the watchdog (see pic_manager.c). */
+		extern void picos_asset_load_tick(void);
+		picos_asset_load_tick();
+#endif
 		tinydir_file file;
 		tinydir_readfile_n(&dir, &file, i);
 		// Ignore campaigns that start with a ~; these are autosaved

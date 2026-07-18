@@ -639,7 +639,9 @@ int SDL_FillRect(SDL_Surface *dst, const SDL_Rect *rect, Uint32 color) {
 
 /* SDL_LoadBMP — stub, icon loading not needed */
 SDL_Surface *SDL_LoadBMP_RW(SDL_RWops *src, int freesrc) {
-    (void)src; (void)freesrc;
+    /* Honor freesrc even though loading is stubbed — the SDL_LoadBMP macro
+     * opens the file first, and dropping it leaks an fd (see mixer shim). */
+    if (src && freesrc) SDL_RWclose(src);
     return NULL;
 }
 
@@ -762,6 +764,16 @@ static SDL_Keycode scancode_to_keycode(SDL_Scancode sc) {
 
 void SDL_PumpEvents(void) {
     if (!g_picos_api || !g_picos_api->input) return;
+
+    /* PicOS exit request (system menu "Exit App" or serial `exit` command).
+     * shouldExit() is self-clearing, so translate it into an SDL_QUIT event
+     * that C-Dogs' event loop already knows how to unwind cleanly. */
+    if (g_picos_api->sys->shouldExit()) {
+        SDL_Event quit_ev;
+        memset(&quit_ev, 0, sizeof(quit_ev));
+        quit_ev.type = SDL_QUIT;
+        picos_push_event(&quit_ev);
+    }
 
     /* Poll PicOS button states and generate key events */
     /* Check directional buttons */

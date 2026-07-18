@@ -101,10 +101,13 @@ int MapNewLoadArchive(const char *filename, CampaignSetting *c)
 
 	// Load any custom data
 	LoadArchiveSounds(&gSoundDevice, filename, "sounds");
+	fprintf(stderr, "MapLoadArchive: sounds done\n");
 
 	LoadArchivePics(&gPicManager, gCharSpriteClasses.customClasses, filename);
+	fprintf(stderr, "MapLoadArchive: pics done\n");
 
 	root = ReadArchiveJSON(filename, "particles.json");
+	fprintf(stderr, "MapLoadArchive: particles json read\n");
 	if (root != NULL)
 	{
 		ParticleClassesLoadJSON(&gParticleClasses.CustomClasses, root);
@@ -196,6 +199,7 @@ static json_t *ReadArchiveJSON(const char *archive, const char *filename)
 	json_t *root = NULL;
 	char path[CDOGS_PATH_MAX];
 	sprintf(path, "%s/%s", archive, filename);
+	fprintf(stderr, "ReadArchiveJSON: %s\n", filename);
 	char *buf = ReadFileIntoBuf(path, "rb");
 	if (buf == NULL)
 		goto bail;

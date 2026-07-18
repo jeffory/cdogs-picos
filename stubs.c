@@ -27,6 +27,29 @@ extern jmp_buf g_exit_jmp;
 static uint8_t g_heap[HEAP_SIZE] __attribute__((aligned(8)));
 static uint8_t *g_heap_ptr = g_heap;
 
+/* Remaining never-allocated heap (sbrk watermark; freed blocks recycled by
+ * newlib malloc are not visible here, so this is a conservative floor). */
+size_t picos_heap_free(void) {
+    return (size_t)((g_heap + HEAP_SIZE) - g_heap_ptr);
+}
+
+/* OS tick during bulk asset loading: feeds the hardware watchdog and keeps
+ * the dev console responsive while no frames are being rendered.  Rate-
+ * limited because poll() includes an I2C keyboard read — ticking on every
+ * file operation would visibly slow loading.  Called from the file-op stubs
+ * below so ANY long file-heavy stretch (campaign loads, asset scans) feeds
+ * the watchdog without needing per-loop instrumentation in game code. */
+void picos_asset_load_tick(void) {
+    static uint32_t s_last_tick_ms = 0;
+    if (!g_picos_api || !g_picos_api->sys)
+        return;
+    uint32_t now = g_picos_api->sys->getTimeMs();
+    if (now - s_last_tick_ms < 500)
+        return;
+    s_last_tick_ms = now;
+    g_picos_api->sys->poll();
+}
+
 void * _sbrk(ptrdiff_t incr) {
     uint8_t *prev_ptr = g_heap_ptr;
     if (g_heap_ptr + incr > g_heap + HEAP_SIZE) {
@@ -55,8 +78,11 @@ static void log_flush(void) {
 
 static pcfile_t g_fd_table[16] = {0};
 
+void picos_asset_load_tick(void); /* defined below */
+
 int _open(const char *name, int flags, int mode) {
     (void)mode;
+    picos_asset_load_tick();
     char full_path[256];
     if (name[0] != '/') {
         snprintf(full_path, sizeof(full_path), "%s/%s", g_app_dir, name);
@@ -171,6 +197,7 @@ int _link(const char *old, const char *new_) { (void)old; (void)new_; return -1;
 
 int stat(const char *path, struct stat *buf) {
     if (!buf) return -1;
+    picos_asset_load_tick();
     memset(buf, 0, sizeof(*buf));
     /* Try to open the file to check existence */
     char full_path[256];
@@ -181,20 +208,25 @@ int stat(const char *path, struct stat *buf) {
         full_path[sizeof(full_path) - 1] = '\0';
     }
 
-    /* Check if it's a file */
+    /* fs->exists() is true for BOTH files and directories, so distinguish by
+     * attempting to open as a file: directories are not openable.  The old
+     * logic here reported every existing directory as S_IFREG, which made
+     * tinydir's is_dir false for all campaign folders (and reported missing
+     * paths as directories). */
     if (g_picos_api->fs->exists(full_path)) {
-        buf->st_mode = S_IFREG | 0644;
         pcfile_t f = g_picos_api->fs->open(full_path, "rb");
         if (f) {
+            buf->st_mode = S_IFREG | 0644;
             buf->st_size = g_picos_api->fs->fsize(f);
             g_picos_api->fs->close(f);
+        } else {
+            buf->st_mode = S_IFDIR | 0755;
         }
         return 0;
     }
 
-    /* Assume it might be a directory */
-    buf->st_mode = S_IFDIR | 0755;
-    return 0;
+    errno = ENOENT;
+    return -1;
 }
 
 int access(const char *path, int mode) {
@@ -237,8 +269,10 @@ int chdir(const char *path) { (void)path; return 0; }
 
 /* Pool of directory states to support nested opendir (tinydir_file_open
  * calls opendir on the parent directory, so we need at least 2 active).
- * Each slot: 128 entries × 64 bytes = 8KB, pool of 4 = 32KB total. */
-#define MAX_DIR_ENTRIES 128
+ * MAX_DIR_ENTRIES must cover the largest game dir: data/graphics has 344
+ * top-level entries — at the old cap of 128, two thirds of the sprites were
+ * silently never loaded. Each slot: 512 × 64B = 32KB, pool of 4 = 128KB BSS. */
+#define MAX_DIR_ENTRIES 512
 #define MAX_DIR_NAME 64
 #define DIR_POOL_SIZE 4
 typedef struct {
@@ -262,15 +296,19 @@ static void dir_list_cb(const char *name, bool is_dir, uint32_t size, void *user
 }
 
 DIR *opendir(const char *name) {
+    picos_asset_load_tick();
     /* Find a free slot in the pool */
     picos_dir_t *d = NULL;
+    int slot = -1;
     for (int i = 0; i < DIR_POOL_SIZE; i++) {
         if (!s_dir_pool[i].in_use) {
             d = &s_dir_pool[i];
+            slot = i;
             break;
         }
     }
     if (!d) {
+        fprintf(stderr, "opendir POOL EXHAUSTED for '%s' (leaked closedir?)\n", name);
         errno = ENOMEM;
         return NULL;
     }
@@ -287,6 +325,12 @@ DIR *opendir(const char *name) {
     d->pos = 0;
     d->in_use = 1;
     g_picos_api->fs->listDir(full_path, dir_list_cb, d);
+    /* Only log anomalies — per-dir logging at 115200 baud adds seconds of
+     * blocking printf to every asset scan. */
+    if (d->count >= MAX_DIR_ENTRIES)
+        fprintf(stderr, "opendir '%s' slot=%d count=%d (CAP HIT)\n",
+                full_path, slot, d->count);
+    (void)slot;
 
     return (DIR *)d;
 }
