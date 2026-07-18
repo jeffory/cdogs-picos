@@ -4,5 +4,8 @@
     "description": "Classic overhead run-and-gun game",
     "type": "native",
     "version": "0.0.1",
-    "requirements": ["root-filesystem", "audio"]
+    "requirements": ["root-filesystem", "audio"],
+    "category": "games",
+    "repo": "jeffory/picos-apps",
+    "min_firmware": "1.0.0"
 }
