@@ -135,13 +135,6 @@ bool PicTryMakeTex(Pic *p)
 	if (p->Tex != NULL)
 	{
 		LOG(LM_GFX, LL_TRACE, "destroying texture %p data(%p)", p->Tex, p->Data);
-#ifdef PICOS
-		{
-			int texW = 0, texH = 0;
-			SDL_QueryTexture(p->Tex, NULL, NULL, &texW, &texH);
-			g_picos_pic_tex_bytes -= (size_t)texW * texH * sizeof(Uint32);
-		}
-#endif
 		SDL_DestroyTexture(p->Tex);
 		if (LL_TRACE >= LogModuleGetLevel(LM_GFX))
 		{
@@ -166,6 +159,18 @@ bool PicTryMakeTex(Pic *p)
 		}
 	}
 	const struct vec2i size = PicPixelSize(p);
+#ifdef PICOS
+	/* No GPU: TextureCreate + SDL_UpdateTexture would allocate and memcpy a
+	   byte-identical second copy of p->Data.  Borrow it instead.
+	   Safe because PicFree destroys Tex before CFREE(pic->Data), and
+	   PicShrink calls back here after replacing Data. */
+	p->Tex = PicosTextureBorrow(p->Data, size.x, size.y);
+	if (p->Tex == NULL)
+	{
+		LOG(LM_GFX, LL_ERROR, "cannot borrow texture");
+		return false;
+	}
+#else
 	p->Tex = TextureCreate(
 		gGraphicsDevice.gameWindow.renderer, SDL_TEXTUREACCESS_STATIC,
 						   size, SDL_BLENDMODE_NONE, 255);
@@ -174,20 +179,6 @@ bool PicTryMakeTex(Pic *p)
 		LOG(LM_GFX, LL_ERROR, "cannot create texture: %s", SDL_GetError());
 		return false;
 	}
-#ifdef PICOS
-	// This increment is only balanced by PicFree()'s matching decrement
-	// (query-before-destroy on pic->Tex, below). If PicTryMakeTex() fails on
-	// one of the two calls further down (SDL_UpdateTexture /
-	// SDL_SetTextureBlendMode), every caller (pic_manager.c) just does
-	// `Tex = NULL` instead of routing through PicFree(), orphaning both the
-	// SDL texture and this count. That's a pre-existing upstream leak, not
-	// introduced or fixed here — and unreachable in practice with the
-	// current PICOS SDL shim, since both of those calls only fail given a
-	// NULL texture or NULL pixel data, neither of which can be true for the
-	// Pic that just reached this line.
-	g_picos_pic_tex_bytes += (size_t)size.x * size.y * sizeof(Uint32);
-	picos_gfx_bytes_peak_sample();
-#endif
 	if (SDL_UpdateTexture(
 		p->Tex, NULL, p->Data, size.x * sizeof(Uint32)) != 0)
 	{
@@ -200,6 +191,7 @@ bool PicTryMakeTex(Pic *p)
 			SDL_GetError());
 		return false;
 	}
+#endif
 	LOG(LM_GFX, LL_TRACE, "made texture %p data(%p) count(%d)",
 		p->Tex, p->Data, hashmap_length(textureDebugger));
 	if (LL_TRACE >= LogModuleGetLevel(LM_GFX))
@@ -241,13 +233,6 @@ void PicFree(Pic *pic)
 	if (pic->Tex != NULL)
 	{
 		LOG(LM_GFX, LL_TRACE, "freeing texture %p data(%p)", pic->Tex, pic->Data);
-#ifdef PICOS
-		{
-			int texW = 0, texH = 0;
-			SDL_QueryTexture(pic->Tex, NULL, NULL, &texW, &texH);
-			g_picos_pic_tex_bytes -= (size_t)texW * texH * sizeof(Uint32);
-		}
-#endif
 		SDL_DestroyTexture(pic->Tex);
 		if (LL_TRACE >= LogModuleGetLevel(LM_GFX))
 		{

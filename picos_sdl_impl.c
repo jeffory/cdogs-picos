@@ -293,6 +293,27 @@ SDL_Texture *SDL_CreateTexture(SDL_Renderer *r, Uint32 format, int access,
     return (SDL_Texture *)t;
 }
 
+/* Create a texture that references caller-owned pixels instead of copying
+   them.  There is no GPU here, so a texture is just heap — duplicating
+   every Pic->Data buffer doubled resident graphics memory for no benefit.
+   The caller must keep the buffer alive for the texture's lifetime and
+   must re-make the texture if the buffer is reallocated. */
+SDL_Texture *PicosTextureBorrow(uint32_t *pixels, int w, int h) {
+    if (!pixels || w <= 0 || h <= 0) return NULL;
+    PicosTexture *t = calloc(1, sizeof(PicosTexture));
+    if (!t) return NULL;
+    t->w = w;
+    t->h = h;
+    t->pitch = w * 4;
+    t->access = SDL_TEXTUREACCESS_STATIC;
+    t->r_mod = t->g_mod = t->b_mod = 255;
+    t->a_mod = 255;
+    t->blend_mode = SDL_BLENDMODE_BLEND;
+    t->pixels = pixels;
+    t->owns_pixels = false;
+    return (SDL_Texture *)t;
+}
+
 SDL_Texture *SDL_CreateTextureFromSurface(SDL_Renderer *r, SDL_Surface *s) {
     if (!s) return NULL;
     SDL_Texture *tex = SDL_CreateTexture(r, SDL_PIXELFORMAT_ARGB8888,
