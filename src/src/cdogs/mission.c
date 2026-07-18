@@ -70,6 +70,10 @@
 #include "pickup.h"
 #include "triggers.h"
 
+#ifdef PICOS
+#include "picos_heap.h"
+#endif
+
 color_t colorDoor = {172, 172, 172, 255};
 color_t colorYellowDoor = {252, 224, 0, 255};
 color_t colorGreenDoor = {0, 252, 0, 255};
@@ -542,6 +546,9 @@ void MissionBegin(struct MissionOptions *m, const NGameBegin gb)
 	}
 	m->time = gb.MissionTime;
 	m->pickupTime = 0;
+#ifdef PICOS
+	picos_gfx_report("missionstart");
+#endif
 }
 
 bool CanCompleteMission(const struct MissionOptions *options)

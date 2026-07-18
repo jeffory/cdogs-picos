@@ -43,7 +43,7 @@ echo "Copying graphics..."
 RUNTIME_EXCLUDES=(
     --exclude='*.blend' --exclude='*.blend1'
     --exclude='render.py' --exclude='make_spritesheet.sh'
-    --exclude='src.txt' --exclude='README.md'
+    --exclude='README.md'
 )
 rsync -a --info=progress2 "${RUNTIME_EXCLUDES[@]}" \
     "$SRC_DIR/graphics/" "$DATA_DIR/graphics/"

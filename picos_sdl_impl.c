@@ -5,6 +5,7 @@
 */
 #include "picos_sdl_impl.h"
 #include "os.h"
+#include "picos_heap.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -290,6 +291,7 @@ SDL_Texture *SDL_CreateTexture(SDL_Renderer *r, Uint32 format, int access,
     t->pixels = calloc(w * h, sizeof(uint32_t));
     if (!t->pixels) { free(t); return NULL; }
     t->owns_pixels = true;
+    g_picos_pic_tex_bytes += (size_t)w * h * 4;
     return (SDL_Texture *)t;
 }
 
@@ -327,7 +329,10 @@ SDL_Texture *SDL_CreateTextureFromSurface(SDL_Renderer *r, SDL_Surface *s) {
 void SDL_DestroyTexture(SDL_Texture *t) {
     PicosTexture *pt = (PicosTexture *)t;
     if (!pt) return;
-    if (pt->owns_pixels) free(pt->pixels);
+    if (pt->owns_pixels) {
+        g_picos_pic_tex_bytes -= (size_t)pt->w * pt->h * 4;
+        free(pt->pixels);
+    }
     free(pt);
 }
 

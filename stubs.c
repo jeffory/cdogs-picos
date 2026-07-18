@@ -70,14 +70,17 @@ void picos_heap_report(const char *tag) {
     fprintf(stderr, "HEAPSTAT %s watermark=%u true=%u arena=%u used=%u peak=%u\n",
             tag,
             (unsigned)watermark,
-            (unsigned)(watermark + (size_t)mi.fordblks),
+            (unsigned)picos_heap_free_true(),
             (unsigned)mi.arena,
             (unsigned)mi.uordblks,
             (unsigned)s_heap_used_peak);
 }
 
-/* Resident-graphics accounting.  Defined here rather than in pic.c so the
- * symbols exist even in builds where pic.c is excluded. */
+/* Resident-graphics accounting.  Defined here rather than in pic.c so it
+ * lives alongside the rest of the PICOS-only heap/graphics instrumentation
+ * in one file (stubs.c is itself PICOS-only; pic.c is shared with the
+ * non-PICOS desktop build and only touches these symbols inside
+ * #ifdef PICOS blocks). */
 size_t g_picos_pic_data_bytes = 0;
 size_t g_picos_pic_tex_bytes  = 0;
 size_t g_picos_pic_bytes_peak = 0;

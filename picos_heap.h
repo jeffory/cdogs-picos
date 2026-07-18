@@ -2,7 +2,7 @@
     C-Dogs SDL PicOS Port — heap and graphics instrumentation
 
     Reporting only.  None of this is wired into allocation decisions;
-    see the note on picos_heap_free_true() before changing that.
+    see the note on picos_heap_free() before changing that.
 */
 #ifndef PICOS_HEAP_H
 #define PICOS_HEAP_H
@@ -31,17 +31,28 @@ size_t picos_heap_free_true(void);
    the current arena size after newlib trims the heap. */
 void picos_heap_report(const char *tag);
 
-/* Live resident-graphics accounting, maintained by pic.c. */
+/* Live resident-graphics accounting. data_bytes and pic_count are
+   maintained by pic.c; tex_bytes is maintained by the SDL texture shim
+   (picos_sdl_impl.c's SDL_CreateTexture/SDL_DestroyTexture), which is the
+   only code that knows whether a given texture actually owns a pixel
+   buffer rather than borrowing one. */
 extern size_t g_picos_pic_data_bytes;
 extern size_t g_picos_pic_tex_bytes;
 extern int    g_picos_pic_count;
-/* High-water mark of (data+tex). Updated via picos_gfx_bytes_peak_sample()
-   below wherever either byte counter increases — a cheap comparison on
-   pic.c's allocation hot path, no allocation of its own. Unlike an
-   instantaneous sample at report time, this cannot land between two
-   report ticks and miss a load that both starts and finishes inside the
-   gap (empirically, C-Dogs' boot-time asset scan at the idle main menu
-   does exactly that against picos_asset_load_tick's report cadence). */
+/* High-water mark of (data+tex), each sample computed from the CURRENT
+   values of both counters. The sampler, picos_gfx_bytes_peak_sample()
+   below, is only called from pic.c's data-changing sites (PicLoad/
+   PicCopy/PicShrink) — a tex_bytes update in the texture shim
+   (picos_sdl_impl.c) does not by itself trigger a sample. In practice this
+   still captures the combined total: GraphicsInitialize creates C-Dogs'
+   window-sized owning textures (bumping tex_bytes) before PicManagerLoad
+   loads a single sprite, and peak only ever increases, so the first
+   data-changing sample after that point already sees tex_bytes at its
+   settled value. Unlike an instantaneous sample at report time, this
+   cannot land between two report ticks and miss a load that both starts
+   and finishes inside the gap (empirically, C-Dogs' boot-time asset scan
+   at the idle main menu does exactly that against
+   picos_asset_load_tick's report cadence). */
 extern size_t g_picos_pic_bytes_peak;
 /* Images refused by the LoadImgToSurface reserve guard. */
 extern int    g_picos_img_skip_count;

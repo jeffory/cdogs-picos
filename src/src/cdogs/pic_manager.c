@@ -32,6 +32,10 @@
 #include "files.h"
 #include "log.h"
 
+#ifdef PICOS
+#include "picos_heap.h"
+#endif
+
 #define GRAPHICS_DIR "graphics"
 #define GRAPHICS_HD_DIR "graphics_hd"
 
@@ -278,6 +282,9 @@ void PicManagerLoad(PicManager *pm)
 	PicManagerLoadDir(pm, buf, NULL, pm->pics, pm->sprites, false);
 	GetDataFilePath(buf, GRAPHICS_HD_DIR);
 	PicManagerLoadDir(pm, buf, NULL, pm->pics, pm->sprites, true);
+#ifdef PICOS
+	picos_gfx_report("picmanagerload");
+#endif
 }
 
 static void FindStylePics(
