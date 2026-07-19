@@ -249,7 +249,12 @@ void SDL_RenderPresent(SDL_Renderer *r) {
                 first_val);
     }
 
-    /* Convert ARGB8888 → RGB565 big-endian (matching PicOS ST7365P display) */
+    /* Convert ARGB8888 → RGB565 host-order (matching PicOS ST7365P display).
+     * drawImageNN() below consumes host-order RGB565 and performs the
+     * byte-swap to the panel's big-endian wire format itself (see
+     * src/drivers/display.c). Byte-swapping here as well composed with that
+     * swap back to the identity, so every colour reached the panel
+     * byte-swapped (e.g. red rendered as blue, magenta as cyan). */
     const uint32_t *src = pr->framebuf;
     uint16_t *dst = s_rgb565_buf;
     int count = pr->fb_w * pr->fb_h;
@@ -258,9 +263,7 @@ void SDL_RenderPresent(SDL_Renderer *r) {
         uint32_t r_ = (px >> 16) & 0xFF;
         uint32_t g_ = (px >> 8) & 0xFF;
         uint32_t b_ = px & 0xFF;
-        uint16_t rgb565 = (uint16_t)(((r_ >> 3) << 11) | ((g_ >> 2) << 5) | (b_ >> 3));
-        /* Byte-swap to big-endian for PicOS display format */
-        dst[i] = (rgb565 >> 8) | (rgb565 << 8);
+        dst[i] = (uint16_t)(((r_ & 0xF8) << 8) | ((g_ & 0xFC) << 3) | (b_ >> 3));
     }
 
     /* Blit to PicOS display, centered vertically */
