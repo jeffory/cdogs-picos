@@ -281,20 +281,27 @@ void SDL_RenderPresent(SDL_Renderer *r) {
 
 SDL_Texture *SDL_CreateTexture(SDL_Renderer *r, Uint32 format, int access,
                                int w, int h) {
-    (void)r; (void)format;
+    (void)r; (void)format;  /* the shim picks the format; see below */
+    if (w <= 0 || h <= 0) return NULL;
     PicosTexture *t = calloc(1, sizeof(PicosTexture));
     if (!t) return NULL;
+    /* INTERIM (removed in Task 4): render targets stay ARGB8888 while the
+       renderer's default target is still ARGB8888, so get_target() can
+       return one pointer type. Everything else is RGB565 now. */
+    t->fmt = (access == SDL_TEXTUREACCESS_TARGET) ? PICOS_TEXFMT_ARGB8888
+                                                  : PICOS_TEXFMT_RGB565;
+    const size_t bpp = (t->fmt == PICOS_TEXFMT_RGB565) ? 2u : 4u;
     t->w = w;
     t->h = h;
-    t->pitch = w * 4;
+    t->pitch = w * (int)bpp;
     t->access = access;
     t->r_mod = t->g_mod = t->b_mod = 255;
     t->a_mod = 255;
     t->blend_mode = SDL_BLENDMODE_BLEND;
-    t->pixels = calloc(w * h, sizeof(uint32_t));
+    t->pixels = calloc((size_t)w * h, bpp);
     if (!t->pixels) { free(t); return NULL; }
     t->owns_pixels = true;
-    g_picos_pic_tex_bytes += (size_t)w * h * 4;
+    g_picos_pic_tex_bytes += (size_t)w * h * bpp;
     return (SDL_Texture *)t;
 }
 
@@ -309,6 +316,8 @@ SDL_Texture *PicosTextureBorrow(uint32_t *pixels, int w, int h) {
     if (!t) return NULL;
     t->w = w;
     t->h = h;
+    /* Borrowed pixels are Pic->Data, which stays ARGB8888 until 2C. */
+    t->fmt = PICOS_TEXFMT_ARGB8888;
     t->pitch = w * 4;
     t->access = SDL_TEXTUREACCESS_STATIC;
     t->r_mod = t->g_mod = t->b_mod = 255;
@@ -333,7 +342,8 @@ void SDL_DestroyTexture(SDL_Texture *t) {
     PicosTexture *pt = (PicosTexture *)t;
     if (!pt) return;
     if (pt->owns_pixels) {
-        g_picos_pic_tex_bytes -= (size_t)pt->w * pt->h * 4;
+        const size_t bpp = (pt->fmt == PICOS_TEXFMT_RGB565) ? 2u : 4u;
+        g_picos_pic_tex_bytes -= (size_t)pt->w * pt->h * bpp;
         free(pt->pixels);
     }
     free(pt);
@@ -344,6 +354,10 @@ int SDL_UpdateTexture(SDL_Texture *t, const SDL_Rect *rect, const void *pixels,
     PicosTexture *pt = (PicosTexture *)t;
     if (!pt || !pt->pixels || !pixels) return -1;
 
+    /* Callers always supply ARGB8888 rows: blit.c:214 passes g->buf (which
+       stays ARGB8888 until 2C) and SDL_CreateTextureFromSurface passes an
+       ARGB8888 surface.  `pitch` is that SOURCE stride in bytes and is
+       independent of this texture's own format. */
     int dx = rect ? rect->x : 0;
     int dy = rect ? rect->y : 0;
     int dw = rect ? rect->w : pt->w;
@@ -352,12 +366,21 @@ int SDL_UpdateTexture(SDL_Texture *t, const SDL_Rect *rect, const void *pixels,
     for (int row = 0; row < dh; row++) {
         int ty = dy + row;
         if (ty < 0 || ty >= pt->h) continue;
-        const uint8_t *src_row = (const uint8_t *)pixels + row * pitch;
-        uint32_t *dst_row = pt->pixels + ty * pt->w + dx;
+        const uint32_t *src_row =
+            (const uint32_t *)((const uint8_t *)pixels + (size_t)row * pitch);
         int copy_w = dw;
         if (dx + copy_w > pt->w) copy_w = pt->w - dx;
-        if (copy_w > 0)
-            memcpy(dst_row, src_row, copy_w * sizeof(uint32_t));
+        if (copy_w <= 0) continue;
+        if (pt->fmt == PICOS_TEXFMT_RGB565) {
+            uint16_t *dst_row =
+                (uint16_t *)pt->pixels + (size_t)ty * pt->w + dx;
+            for (int i = 0; i < copy_w; i++)
+                dst_row[i] = picos_argb_to_565(src_row[i]);
+        } else {
+            uint32_t *dst_row =
+                (uint32_t *)pt->pixels + (size_t)ty * pt->w + dx;
+            memcpy(dst_row, src_row, (size_t)copy_w * sizeof(uint32_t));
+        }
     }
     return 0;
 }
@@ -366,9 +389,11 @@ int SDL_LockTexture(SDL_Texture *t, const SDL_Rect *rect, void **pixels,
                     int *pitch) {
     PicosTexture *pt = (PicosTexture *)t;
     if (!pt || !pt->pixels) return -1;
-    int x = rect ? rect->x : 0;
-    int y = rect ? rect->y : 0;
-    if (pixels) *pixels = pt->pixels + y * pt->w + x;
+    const int x = rect ? rect->x : 0;
+    const int y = rect ? rect->y : 0;
+    const size_t bpp = (pt->fmt == PICOS_TEXFMT_RGB565) ? 2u : 4u;
+    if (pixels)
+        *pixels = (uint8_t *)pt->pixels + ((size_t)y * pt->w + x) * bpp;
     if (pitch) *pitch = pt->pitch;
     pt->locked = true;
     return 0;
@@ -404,7 +429,9 @@ int SDL_QueryTexture(SDL_Texture *t, Uint32 *format, int *access,
                      int *w, int *h) {
     PicosTexture *pt = (PicosTexture *)t;
     if (!pt) return -1;
-    if (format) *format = SDL_PIXELFORMAT_ARGB8888;
+    if (format) *format = (pt->fmt == PICOS_TEXFMT_RGB565)
+                              ? SDL_PIXELFORMAT_RGB565
+                              : SDL_PIXELFORMAT_ARGB8888;
     if (access) *access = pt->access;
     if (w) *w = pt->w;
     if (h) *h = pt->h;
@@ -451,6 +478,7 @@ int SDL_RenderCopyEx(SDL_Renderer *r, SDL_Texture *t, const SDL_Rect *srcrect,
     uint32_t am = pt->a_mod;
     bool do_color_mod = (rm != 255 || gm != 255 || bm != 255);
     bool do_blend = (pt->blend_mode == SDL_BLENDMODE_BLEND);
+    const bool src565 = (pt->fmt == PICOS_TEXFMT_RGB565);
 
     /* Blit with scaling */
     for (int j = 0; j < dh; j++) {
@@ -462,8 +490,13 @@ int SDL_RenderCopyEx(SDL_Renderer *r, SDL_Texture *t, const SDL_Rect *srcrect,
         int src_y = sy + src_j * sh / dh;
         if (src_y < 0 || src_y >= pt->h) continue;
 
-        uint32_t *dst_row = target + ty * tw;
-        const uint32_t *src_row = pt->pixels + src_y * pt->w;
+        uint32_t *dst_row = target + (size_t)ty * tw;
+        const uint32_t *src_row32 =
+            src565 ? NULL
+                   : (const uint32_t *)pt->pixels + (size_t)src_y * pt->w;
+        const uint16_t *src_row16 =
+            src565 ? (const uint16_t *)pt->pixels + (size_t)src_y * pt->w
+                   : NULL;
 
         for (int i = 0; i < dw; i++) {
             int tx = dx + i;
@@ -474,17 +507,33 @@ int SDL_RenderCopyEx(SDL_Renderer *r, SDL_Texture *t, const SDL_Rect *srcrect,
             int src_x = sx + src_i * sw / dw;
             if (src_x < 0 || src_x >= pt->w) continue;
 
-            uint32_t pixel = src_row[src_x];
-            uint32_t pa = (pixel >> 24) & 0xFF;
-            uint32_t pr_ = (pixel >> 16) & 0xFF;
-            uint32_t pg = (pixel >> 8) & 0xFF;
-            uint32_t pb = pixel & 0xFF;
+            uint32_t pa, pr_, pg, pb;
+            if (src565) {
+                const uint16_t s = src_row16[src_x];
+                if (s == PICOS_RGB565_CKEY) {
+                    /* The colour key stands in for an ARGB alpha-0 pixel,
+                       whose RGB channels were also zero (g->buf is memset
+                       to 0).  Decoding it to (0,0,0,0) makes both branches
+                       below behave exactly as the 32-bit path did: blended
+                       leaves dst untouched, opaque writes black. */
+                    pa = 0; pr_ = 0; pg = 0; pb = 0;
+                } else {
+                    picos_unpack565(s, &pr_, &pg, &pb);
+                    pa = 255;
+                }
+            } else {
+                const uint32_t px = src_row32[src_x];
+                pa  = (px >> 24) & 0xFF;
+                pr_ = (px >> 16) & 0xFF;
+                pg  = (px >> 8) & 0xFF;
+                pb  = px & 0xFF;
+            }
 
             /* Apply color modulation */
             if (do_color_mod) {
                 pr_ = (pr_ * rm) / 255;
-                pg = (pg * gm) / 255;
-                pb = (pb * bm) / 255;
+                pg  = (pg * gm) / 255;
+                pb  = (pb * bm) / 255;
             }
 
             /* Apply alpha modulation */
