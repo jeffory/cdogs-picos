@@ -70,7 +70,7 @@ typedef struct PicosTexture {
 
 /* ── Internal renderer structure ─────────────────────────────── */
 typedef struct PicosRenderer {
-    uint32_t *framebuf;        /* default render target (ARGB8888) */
+    uint16_t *framebuf;        /* default render target (RGB565, host order) */
     int fb_w, fb_h;            /* framebuffer dimensions */
     uint8_t draw_r, draw_g, draw_b, draw_a;
     int draw_blend_mode;

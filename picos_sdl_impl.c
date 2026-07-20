@@ -20,8 +20,6 @@
 /* ── Globals ─────────────────────────────────────────────────── */
 static PicosRenderer s_renderer;
 static int s_renderer_valid = 0;
-/* Reusable RGB565 buffer for SDL_RenderPresent */
-static uint16_t *s_rgb565_buf = NULL;
 
 /* Event queue */
 static SDL_Event s_event_queue[PICOS_EVENT_QUEUE_SIZE];
@@ -45,11 +43,16 @@ static SDL_PixelFormat s_argb8888_format = {
 };
 
 /* ── Helper: get current render target ───────────────────────── */
-static inline uint32_t *get_target(PicosRenderer *r, int *w, int *h) {
+static inline uint16_t *get_target(PicosRenderer *r, int *w, int *h) {
     if (r->render_target) {
         *w = r->render_target->w;
         *h = r->render_target->h;
-        return r->render_target->pixels;
+        /* Render targets always come from SDL_CreateTexture (via
+           TextureCreate), so they are always RGB565.  Borrowed ARGB8888
+           textures are only ever blit sources — fail loudly rather than
+           reinterpret one as 16-bit if that ever changes. */
+        if (r->render_target->fmt != PICOS_TEXFMT_RGB565) return NULL;
+        return (uint16_t *)r->render_target->pixels;
     }
     *w = r->fb_w;
     *h = r->fb_h;
@@ -62,18 +65,17 @@ static inline int clamp_i(int v, int lo, int hi) {
 }
 
 /* ── Helper: alpha blend a single pixel ──────────────────────── */
-static inline uint32_t blend_pixel(uint32_t dst, uint32_t src_r, uint32_t src_g,
+static inline uint16_t blend_pixel(uint16_t dst, uint32_t src_r, uint32_t src_g,
                                    uint32_t src_b, uint32_t src_a) {
     if (src_a == 0) return dst;
-    if (src_a == 255) return (0xFF000000 | (src_r << 16) | (src_g << 8) | src_b);
-    uint32_t inv_a = 255 - src_a;
-    uint32_t dr = (dst >> 16) & 0xFF;
-    uint32_t dg = (dst >> 8) & 0xFF;
-    uint32_t db = dst & 0xFF;
-    uint32_t or_ = (src_r * src_a + dr * inv_a) / 255;
-    uint32_t og = (src_g * src_a + dg * inv_a) / 255;
-    uint32_t ob = (src_b * src_a + db * inv_a) / 255;
-    return 0xFF000000 | (or_ << 16) | (og << 8) | ob;
+    if (src_a == 255) return picos_pack565(src_r, src_g, src_b);
+    const uint32_t inv_a = 255 - src_a;
+    uint32_t dr, dg, db;
+    picos_unpack565(dst, &dr, &dg, &db);
+    const uint32_t or_ = (src_r * src_a + dr * inv_a) / 255;
+    const uint32_t og  = (src_g * src_a + dg * inv_a) / 255;
+    const uint32_t ob  = (src_b * src_a + db * inv_a) / 255;
+    return picos_pack565(or_, og, ob);
 }
 
 /* ================================================================
@@ -120,7 +122,10 @@ SDL_Renderer *SDL_CreateRenderer(SDL_Window *w, int index, Uint32 flags) {
 
     s_renderer.fb_w = GAME_W;
     s_renderer.fb_h = GAME_H;
-    s_renderer.framebuf = calloc(GAME_W * GAME_H, sizeof(uint32_t));
+    /* RGB565 in host byte order: exactly what display->drawImageNN
+       consumes, so SDL_RenderPresent needs no conversion and no staging
+       buffer. */
+    s_renderer.framebuf = calloc(GAME_W * GAME_H, sizeof(uint16_t));
     if (!s_renderer.framebuf) return NULL;
     s_renderer.logical_w = GAME_W;
     s_renderer.logical_h = GAME_H;
@@ -129,11 +134,6 @@ SDL_Renderer *SDL_CreateRenderer(SDL_Window *w, int index, Uint32 flags) {
     s_renderer.render_target = NULL;
     s_renderer_valid = 1;
 
-    /* Allocate RGB565 present buffer */
-    if (!s_rgb565_buf) {
-        s_rgb565_buf = calloc(GAME_W * GAME_H, sizeof(uint16_t));
-    }
-
     return (SDL_Renderer *)&s_renderer;
 }
 
@@ -141,8 +141,6 @@ void SDL_DestroyRenderer(SDL_Renderer *r) {
     if (r == (SDL_Renderer *)&s_renderer && s_renderer_valid) {
         free(s_renderer.framebuf);
         s_renderer.framebuf = NULL;
-        free(s_rgb565_buf);
-        s_rgb565_buf = NULL;
         s_renderer_valid = 0;
     }
 }
@@ -156,11 +154,11 @@ int SDL_SetRenderDrawColor(SDL_Renderer *r, Uint8 red, Uint8 g, Uint8 b, Uint8 a
 int SDL_RenderClear(SDL_Renderer *r) {
     PicosRenderer *pr = (PicosRenderer *)r;
     int tw, th;
-    uint32_t *target = get_target(pr, &tw, &th);
-    uint32_t color = (0xFF000000 | ((uint32_t)pr->draw_r << 16) |
-                     ((uint32_t)pr->draw_g << 8) | pr->draw_b);
-    int count = tw * th;
-    /* Fill with actual color (opaque black = 0xFF000000, not 0x00000000) */
+    uint16_t *target = get_target(pr, &tw, &th);
+    if (!target) return -1;
+    const uint16_t color = picos_pack565(pr->draw_r, pr->draw_g, pr->draw_b);
+    const int count = tw * th;
+    /* Fill with the actual draw colour (opaque black, not transparent) */
     for (int i = 0; i < count; i++) target[i] = color;
     return 0;
 }
@@ -222,19 +220,19 @@ int SDL_GetRendererInfo(SDL_Renderer *r, SDL_RendererInfo *info) {
 
 void SDL_RenderPresent(SDL_Renderer *r) {
     PicosRenderer *pr = (PicosRenderer *)r;
-    if (!pr->framebuf || !s_rgb565_buf || !g_picos_api) return;
+    if (!pr->framebuf || !g_picos_api) return;
 
-    /* Debug: count non-black pixels (anything not 0xFF000000 or 0x00000000) */
+    /* Debug: count non-black pixels over the first few frames */
     static int s_present_count = 0;
     s_present_count++;
     if (s_present_count <= 8) {
         int colored = 0;
         int first_idx = -1;
-        uint32_t first_val = 0;
-        int total = pr->fb_w * pr->fb_h;
+        uint16_t first_val = 0;
+        const int total = pr->fb_w * pr->fb_h;
         for (int i = 0; i < total; i++) {
-            uint32_t px = pr->framebuf[i];
-            if (px != 0 && px != 0xFF000000) {
+            const uint16_t px = pr->framebuf[i];
+            if (px != 0) {
                 if (first_idx < 0) {
                     first_idx = i;
                     first_val = px;
@@ -242,33 +240,18 @@ void SDL_RenderPresent(SDL_Renderer *r) {
                 colored++;
             }
         }
-        fprintf(stderr, "RenderPresent #%d: %dx%d colored=%d/%d first@(%d,%d)=0x%08X\n",
+        fprintf(stderr, "RenderPresent #%d: %dx%d colored=%d/%d first@(%d,%d)=0x%04X\n",
                 s_present_count, pr->fb_w, pr->fb_h, colored, total,
                 first_idx >= 0 ? first_idx % pr->fb_w : -1,
                 first_idx >= 0 ? first_idx / pr->fb_w : -1,
-                first_val);
+                (unsigned)first_val);
     }
 
-    /* Convert ARGB8888 → RGB565 host-order (matching PicOS ST7365P display).
-     * drawImageNN() below consumes host-order RGB565 and performs the
-     * byte-swap to the panel's big-endian wire format itself (see
-     * src/drivers/display.c). Byte-swapping here as well composed with that
-     * swap back to the identity, so every colour reached the panel
-     * byte-swapped (e.g. red rendered as blue, magenta as cyan). */
-    const uint32_t *src = pr->framebuf;
-    uint16_t *dst = s_rgb565_buf;
-    int count = pr->fb_w * pr->fb_h;
-    for (int i = 0; i < count; i++) {
-        uint32_t px = src[i];
-        uint32_t r_ = (px >> 16) & 0xFF;
-        uint32_t g_ = (px >> 8) & 0xFF;
-        uint32_t b_ = px & 0xFF;
-        dst[i] = (uint16_t)(((r_ & 0xF8) << 8) | ((g_ & 0xFC) << 3) | (b_ >> 3));
-    }
-
-    /* Blit to PicOS display, centered vertically */
-    g_picos_api->display->drawImageNN(0, LETTERBOX_Y, s_rgb565_buf,
-                                       pr->fb_w, pr->fb_h, 1);
+    /* The framebuffer is already host-order RGB565, which is what
+       display->drawImageNN consumes — it byte-swaps to the panel's
+       big-endian order itself.  No conversion loop, no staging buffer. */
+    g_picos_api->display->drawImageNN(0, LETTERBOX_Y, pr->framebuf,
+                                      pr->fb_w, pr->fb_h, 1);
     g_picos_api->display->flush();
 
     /* Let PicOS process system events */
@@ -285,11 +268,9 @@ SDL_Texture *SDL_CreateTexture(SDL_Renderer *r, Uint32 format, int access,
     if (w <= 0 || h <= 0) return NULL;
     PicosTexture *t = calloc(1, sizeof(PicosTexture));
     if (!t) return NULL;
-    /* INTERIM (removed in Task 4): render targets stay ARGB8888 while the
-       renderer's default target is still ARGB8888, so get_target() can
-       return one pointer type. Everything else is RGB565 now. */
-    t->fmt = (access == SDL_TEXTUREACCESS_TARGET) ? PICOS_TEXFMT_ARGB8888
-                                                  : PICOS_TEXFMT_RGB565;
+    /* Every shim-owned texture is RGB565, including render targets:
+       get_target() returns uint16_t* unconditionally now. */
+    t->fmt = PICOS_TEXFMT_RGB565;
     const size_t bpp = (t->fmt == PICOS_TEXFMT_RGB565) ? 2u : 4u;
     t->w = w;
     t->h = h;
@@ -456,7 +437,7 @@ int SDL_RenderCopyEx(SDL_Renderer *r, SDL_Texture *t, const SDL_Rect *srcrect,
     if (!pr || !pt || !pt->pixels) return -1;
 
     int tw, th;
-    uint32_t *target = get_target(pr, &tw, &th);
+    uint16_t *target = get_target(pr, &tw, &th);
     if (!target) return -1;
 
     /* Source rect */
@@ -490,7 +471,7 @@ int SDL_RenderCopyEx(SDL_Renderer *r, SDL_Texture *t, const SDL_Rect *srcrect,
         int src_y = sy + src_j * sh / dh;
         if (src_y < 0 || src_y >= pt->h) continue;
 
-        uint32_t *dst_row = target + (size_t)ty * tw;
+        uint16_t *dst_row = target + (size_t)ty * tw;
         const uint32_t *src_row32 =
             src565 ? NULL
                    : (const uint32_t *)pt->pixels + (size_t)src_y * pt->w;
@@ -542,7 +523,7 @@ int SDL_RenderCopyEx(SDL_Renderer *r, SDL_Texture *t, const SDL_Rect *srcrect,
             if (do_blend) {
                 dst_row[tx] = blend_pixel(dst_row[tx], pr_, pg, pb, pa);
             } else {
-                dst_row[tx] = 0xFF000000 | (pr_ << 16) | (pg << 8) | pb;
+                dst_row[tx] = picos_pack565(pr_, pg, pb);
             }
         }
     }
@@ -552,7 +533,7 @@ int SDL_RenderCopyEx(SDL_Renderer *r, SDL_Texture *t, const SDL_Rect *srcrect,
 int SDL_RenderFillRect(SDL_Renderer *r, const SDL_Rect *rect) {
     PicosRenderer *pr = (PicosRenderer *)r;
     int tw, th;
-    uint32_t *target = get_target(pr, &tw, &th);
+    uint16_t *target = get_target(pr, &tw, &th);
     if (!target) return -1;
 
     int x0 = rect ? rect->x : 0;
@@ -564,8 +545,7 @@ int SDL_RenderFillRect(SDL_Renderer *r, const SDL_Rect *rect) {
     x1 = clamp_i(x1, 0, tw);
     y1 = clamp_i(y1, 0, th);
 
-    uint32_t color = 0xFF000000 | ((uint32_t)pr->draw_r << 16) |
-                     ((uint32_t)pr->draw_g << 8) | pr->draw_b;
+    const uint16_t color = picos_pack565(pr->draw_r, pr->draw_g, pr->draw_b);
 
     if (pr->draw_blend_mode == SDL_BLENDMODE_BLEND && pr->draw_a < 255) {
         for (int y = y0; y < y1; y++)
@@ -593,17 +573,14 @@ int SDL_RenderDrawRect(SDL_Renderer *r, const SDL_Rect *rect) {
 int SDL_RenderDrawPoint(SDL_Renderer *r, int x, int y) {
     PicosRenderer *pr = (PicosRenderer *)r;
     int tw, th;
-    uint32_t *target = get_target(pr, &tw, &th);
+    uint16_t *target = get_target(pr, &tw, &th);
     if (!target || x < 0 || y < 0 || x >= tw || y >= th) return -1;
-
-    uint32_t color = 0xFF000000 | ((uint32_t)pr->draw_r << 16) |
-                     ((uint32_t)pr->draw_g << 8) | pr->draw_b;
 
     if (pr->draw_blend_mode == SDL_BLENDMODE_BLEND && pr->draw_a < 255) {
         target[y * tw + x] = blend_pixel(target[y * tw + x],
             pr->draw_r, pr->draw_g, pr->draw_b, pr->draw_a);
     } else {
-        target[y * tw + x] = color;
+        target[y * tw + x] = picos_pack565(pr->draw_r, pr->draw_g, pr->draw_b);
     }
     return 0;
 }
