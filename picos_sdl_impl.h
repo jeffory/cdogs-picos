@@ -28,7 +28,7 @@ struct PicoCalcAPI;
 /* Pack 8-bit channels into host-order RGB565, nudging away from the
    colour key so an opaque magenta never reads back as transparent. */
 static inline uint16_t picos_pack565(uint32_t r, uint32_t g, uint32_t b) {
-    uint16_t p = (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+    uint16_t p = (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | ((b & 0xF8) >> 3));
     if (p == PICOS_RGB565_CKEY) p = (uint16_t)(PICOS_RGB565_CKEY - 1);
     return p;
 }

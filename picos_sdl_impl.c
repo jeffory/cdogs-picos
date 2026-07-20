@@ -207,7 +207,7 @@ int SDL_GetRendererInfo(SDL_Renderer *r, SDL_RendererInfo *info) {
         info->name = "picos";
         info->flags = SDL_RENDERER_SOFTWARE | SDL_RENDERER_TARGETTEXTURE;
         info->num_texture_formats = 1;
-        info->texture_formats[0] = SDL_PIXELFORMAT_ARGB8888;
+        info->texture_formats[0] = SDL_PIXELFORMAT_RGB565;
         info->max_texture_width = 1024;
         info->max_texture_height = 1024;
     }
@@ -215,7 +215,7 @@ int SDL_GetRendererInfo(SDL_Renderer *r, SDL_RendererInfo *info) {
 }
 
 /* ================================================================
-   RENDER PRESENT — ARGB8888 → RGB565 → PicOS display
+   RENDER PRESENT — RGB565 framebuffer → PicOS display
    ================================================================ */
 
 void SDL_RenderPresent(SDL_Renderer *r) {
@@ -279,8 +279,21 @@ SDL_Texture *SDL_CreateTexture(SDL_Renderer *r, Uint32 format, int access,
     t->r_mod = t->g_mod = t->b_mod = 255;
     t->a_mod = 255;
     t->blend_mode = SDL_BLENDMODE_BLEND;
-    t->pixels = calloc((size_t)w * h, bpp);
+    /* A freshly created texture must read back as fully transparent, the
+       way a zeroed ARGB8888 buffer did (alpha=0).  RGB565 has no alpha
+       channel, so 0x0000 is opaque black, not transparent — calloc's
+       zero fill is the wrong initial value here.  Use malloc and fill
+       every texel with the colour-key sentinel instead; this applies to
+       render targets too (get_target() returns this same buffer), so a
+       target blitted from before its first draw behaves as transparent,
+       matching the pre-RGB565 semantics. */
+    t->pixels = malloc((size_t)w * h * bpp);
     if (!t->pixels) { free(t); return NULL; }
+    {
+        uint16_t *px = (uint16_t *)t->pixels;
+        const size_t count = (size_t)w * h;
+        for (size_t i = 0; i < count; i++) px[i] = PICOS_RGB565_CKEY;
+    }
     t->owns_pixels = true;
     g_picos_pic_tex_bytes += (size_t)w * h * bpp;
     return (SDL_Texture *)t;
