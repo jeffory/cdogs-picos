@@ -767,8 +767,25 @@ Uint64 SDL_GetPerformanceFrequency(void) {
 void SDL_Delay(Uint32 ms) {
     if (!g_picos_api || !g_picos_api->sys) return;
     uint32_t start = g_picos_api->sys->getTimeMs();
-    while (g_picos_api->sys->getTimeMs() - start < ms) {
-        /* busy wait — no sleep on bare metal */
+    /* Pump the OS while waiting.  sys->poll() is what feeds PicOS's 10s
+       hardware watchdog, and in this port the only other caller is
+       SDL_RenderPresent — so any stretch that waits without drawing is a
+       stretch with nothing feeding the watchdog.  game_loop.c's idle path
+       is exactly that: once a screen has drawn its first frame it stops
+       redrawing a static screen and spins here on SDL_Delay(1), which used
+       to reset the device mid-campaign-load (watchdog_caused_reboot=1, no
+       crashlog, since a timeout is not a fault).
+       Rate-limited because poll() does an I2C keyboard read: at 100ms the
+       watchdog is fed ~100x more often than it needs while costing at most
+       ten I2C transactions a second. */
+    static uint32_t s_last_poll_ms = 0;
+    for (;;) {
+        const uint32_t now = g_picos_api->sys->getTimeMs();
+        if (now - start >= ms) break;
+        if (now - s_last_poll_ms >= 100) {
+            s_last_poll_ms = now;
+            g_picos_api->sys->poll();
+        }
     }
 }
 
