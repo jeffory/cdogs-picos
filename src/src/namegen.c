@@ -48,6 +48,18 @@ void NameGenInit(
 static void LoadFile(CArray *strings, const char *filename)
 {
 	FILE *file = fopen(filename, "r");
+	if (file == NULL)
+	{
+		/* prefixes/suffixes/suffixnames.txt were dropped from the shipped
+		   PicOS data set in the original port commit (e6eb5347), so this
+		   fopen fails on a fresh install and in the simulator. Without this
+		   guard fgets() is handed a NULL FILE*, which on RP2350 does not
+		   fault — there is no MMU and address 0 is readable flash — so it
+		   reads garbage rather than crashing. Leaving the array empty is
+		   safe: NameGenMake's callers only use it for random player names. */
+		fprintf(stderr, "namegen: name list missing: %s\n", filename);
+		return;
+	}
 	char buf[256];
 	while (fgets(buf, 256, file) != NULL)
 	{
@@ -78,6 +90,17 @@ static void UnloadStrings(CArray *strings)
 static bool IsSameWord(const char *l, const char *r);
 void NameGenMake(const NameGen *g, char *buf)
 {
+	if (g->prefixes.size == 0 ||
+		(g->suffixes.size + g->suffixNames.size) == 0)
+	{
+		/* The loop below is unbounded and indexes with rand() % size, so an
+		   empty word list spins forever rather than failing. That is reachable
+		   whenever a name list is missing (see LoadFile) — and on this target
+		   a spin is worse than a crash: it hangs until the OS watchdog gives
+		   up, with no fault recorded. */
+		strcpy(buf, "Player");
+		return;
+	}
 	for (;;)
 	{
 		char **prefix = CArrayGet(&g->prefixes, rand() % g->prefixes.size);
