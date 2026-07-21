@@ -348,6 +348,23 @@ int SDL_UpdateTexture(SDL_Texture *t, const SDL_Rect *rect, const void *pixels,
     PicosTexture *pt = (PicosTexture *)t;
     if (!pt || !pt->pixels || !pixels) return -1;
 
+    /* Pump the OS from the blit path as well as the present path. A screen
+       that is waiting for input renders every frame but game_loop.c can skip
+       the present, so SDL_RenderPresent's poll never runs — the player-select
+       screen was measured drawing 11x/s and updating 31x/s for 70s with no
+       poll at all, which starves the watchdog (Core 1 relays only while
+       Core 0's heartbeat is under 60s old, see PicOS main.c) and resets the
+       device out from under a perfectly healthy app. Rate-limited because
+       poll() does an I2C keyboard read. */
+    if (g_picos_api && g_picos_api->sys) {
+        static uint32_t s_last_poll_ms = 0;
+        const uint32_t now = g_picos_api->sys->getTimeMs();
+        if (now - s_last_poll_ms >= 100) {
+            s_last_poll_ms = now;
+            g_picos_api->sys->poll();
+        }
+    }
+
     /* Callers always supply ARGB8888 rows: blit.c:214 passes g->buf (which
        stays ARGB8888 until 2C) and SDL_CreateTextureFromSurface passes an
        ARGB8888 surface.  `pitch` is that SOURCE stride in bytes and is
