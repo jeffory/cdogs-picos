@@ -302,7 +302,7 @@ static int MaybeAddKeyPicName(any_t data, any_t item);
 static int MaybeAddDoorPicName(any_t data, any_t item);
 static void AfterAdd(PicManager *pm)
 {
-	fprintf(stderr, "AfterAdd: enter\n");
+	PICOS_LOADLOG("AfterAdd: enter\n");
 	FindStyleSprites(
 		pm, &pm->headPartNames[HEAD_PART_HAIR], MaybeAddHairSpriteName);
 	FindStyleSprites(
@@ -317,7 +317,7 @@ static void AfterAdd(PicManager *pm)
 	FindStylePics(pm, &pm->exitStyleNames, MaybeAddExitPicName);
 	FindStylePics(pm, &pm->doorStyleNames, MaybeAddDoorPicName);
 	FindStylePics(pm, &pm->keyStyleNames, MaybeAddKeyPicName);
-	fprintf(stderr, "AfterAdd: exit\n");
+	PICOS_LOADLOG("AfterAdd: exit\n");
 }
 static int CompareStyleNames(const void *v1, const void *v2);
 static void StylesClear(CArray *styles)

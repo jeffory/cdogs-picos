@@ -69,4 +69,24 @@ static inline void picos_gfx_bytes_peak_sample(void) {
      GFXSTAT <tag> pics=<d> data=<u> tex=<u> total=<u> peak=<u> skipped=<d> */
 void picos_gfx_report(const char *tag);
 
+/* Per-item load tracing (every pic added, every JSON file read).
+ *
+ * Off by default because stderr is USB CDC at 115200 baud, where a ~20-byte
+ * line costs roughly 1.7ms of BLOCKING serial write. Asset loading adds pics
+ * in the low thousands, so tracing per add spent multiple seconds of the
+ * startup budget doing nothing but talking to the host — and that budget is
+ * also what the OS watchdog is measuring.
+ *
+ * Build with -DPICOS_VERBOSE_LOAD=1 to get it back. Deliberately does NOT
+ * cover HEAPSTAT/GFXSTAT, the RenderPresent census or the main-menu marker:
+ * the e2e suite parses those. */
+#ifndef PICOS_VERBOSE_LOAD
+#define PICOS_VERBOSE_LOAD 0
+#endif
+#if PICOS_VERBOSE_LOAD
+#define PICOS_LOADLOG(...) fprintf(stderr, __VA_ARGS__)
+#else
+#define PICOS_LOADLOG(...) ((void)0)
+#endif
+
 #endif /* PICOS_HEAP_H */

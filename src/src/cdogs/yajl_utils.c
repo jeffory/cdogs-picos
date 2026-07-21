@@ -27,6 +27,10 @@
 
 #include "log.h"
 
+#ifdef PICOS
+#include "picos_heap.h"
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -64,16 +68,16 @@ static char *ReadFile(const char *filename)
 	extern int _lseek(int, int, int);
 	extern int _close(int);
 	int fd = _open(filename, 0 /*O_RDONLY*/, 0);
-	fprintf(stderr, "ReadFile PICOS: open('%s') fd=%d\n", filename, fd);
+	PICOS_LOADLOG("ReadFile PICOS: open('%s') fd=%d\n", filename, fd);
 	if (fd < 0) return NULL;
 	int size = _lseek(fd, 0, 2 /*SEEK_END*/);
-	fprintf(stderr, "ReadFile PICOS: lseek SEEK_END -> size=%d\n", size);
+	PICOS_LOADLOG("ReadFile PICOS: lseek SEEK_END -> size=%d\n", size);
 	if (size <= 0) { _close(fd); return NULL; }
 	_lseek(fd, 0, 0 /*SEEK_SET*/);
 	char *buf = malloc(size + 1);
 	if (!buf) { fprintf(stderr, "ReadFile PICOS: malloc(%d) failed\n", size+1); _close(fd); return NULL; }
 	int nread = _read(fd, buf, size);
-	fprintf(stderr, "ReadFile PICOS: read(%d) -> nread=%d\n", size, nread);
+	PICOS_LOADLOG("ReadFile PICOS: read(%d) -> nread=%d\n", size, nread);
 	buf[nread > 0 ? nread : 0] = '\0';
 	_close(fd);
 	return buf;
