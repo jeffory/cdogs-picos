@@ -303,16 +303,26 @@ SDL_Texture *SDL_CreateTexture(SDL_Renderer *r, Uint32 format, int access,
    them.  There is no GPU here, so a texture is just heap — duplicating
    every Pic->Data buffer doubled resident graphics memory for no benefit.
    The caller must keep the buffer alive for the texture's lifetime and
-   must re-make the texture if the buffer is reallocated. */
-SDL_Texture *PicosTextureBorrow(uint32_t *pixels, int w, int h) {
+   must re-make the texture if the buffer is reallocated.
+
+   pic_fmt mirrors cdogs' PicFormat enum (pic.h) as a plain uint8_t so this
+   SDL shim stays independent of game-engine headers:
+     0 = PIC_FMT_ARGB8888, 1 = PIC_FMT_RGB565, 2 = PIC_FMT_LA8.
+   Sub-project 2C converts pics away from ARGB8888 one role at a time; only
+   the ARGB8888 mapping exists so far (RGB565/LA8 arrive in Tasks 2/4). */
+SDL_Texture *PicosTextureBorrow(void *pixels, int w, int h, uint8_t pic_fmt) {
     if (!pixels || w <= 0 || h <= 0) return NULL;
     PicosTexture *t = calloc(1, sizeof(PicosTexture));
     if (!t) return NULL;
     t->w = w;
     t->h = h;
-    /* Borrowed pixels are Pic->Data, which stays ARGB8888 until 2C. */
-    t->fmt = PICOS_TEXFMT_ARGB8888;
-    t->pitch = w * 4;
+    switch (pic_fmt) {
+    case 0: /* PIC_FMT_ARGB8888 */
+    default:
+        t->fmt = PICOS_TEXFMT_ARGB8888;
+        t->pitch = w * 4;
+        break;
+    }
     t->access = SDL_TEXTUREACCESS_STATIC;
     t->r_mod = t->g_mod = t->b_mod = 255;
     t->a_mod = 255;

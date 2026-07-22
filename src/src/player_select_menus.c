@@ -302,8 +302,8 @@ static menu_t *CreateColorMenu(
 	{
 		for (v.x = 0; v.x < data->palette->size.x; v.x++)
 		{
-			const color_t colour = PIXEL2COLOR(
-				data->palette->Data[v.x + v.y * data->palette->size.x]);
+			const color_t colour = PicPx(
+				data->palette, v.x + v.y * data->palette->size.x);
 			if (colour.a == 0)
 			{
 				continue;
@@ -345,7 +345,7 @@ static void DrawColorMenu(
 	// Draw colour squares from the palette
 	RECT_FOREACH(Rect2iNew(svec2i_zero(), d->palette->size))
 	const int idx = _v.x + _v.y * d->palette->size.x;
-	const color_t colour = PIXEL2COLOR(d->palette->Data[idx]);
+	const color_t colour = PicPx(d->palette, idx);
 	if (colour.a == 0)
 	{
 		continue;
@@ -372,7 +372,7 @@ static void ColorMenuOnChange(ColorMenuData *d, const struct vec2i v)
 		return;
 	}
 	const color_t colour =
-		PIXEL2COLOR(d->palette->Data[v.x + v.y * d->palette->size.x]);
+		PicPx(d->palette, v.x + v.y * d->palette->size.x);
 	if (colour.a != 0)
 	{
 		d->selectedColor = v;

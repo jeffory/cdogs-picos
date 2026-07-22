@@ -155,7 +155,7 @@ static void PicManagerAdd(
 				// Convert char pics to multichannel version
 				for (int i = 0; i < pic->size.x * pic->size.y; i++)
 				{
-					color_t c = PIXEL2COLOR(pic->Data[i]);
+					color_t c = PicPx(pic, i);
 					// Don't bother if the alpha has already been modified; it
 					// means we have already processed this pixel
 					if (c.a != 255)
@@ -173,7 +173,7 @@ static void PicManagerAdd(
 						converted.r = converted.g = converted.b = value;
 						converted.a = CharColorTypeAlpha(colorType);
 					}
-					pic->Data[i] = COLOR2PIXEL(converted);
+					PicPxSet(pic, i, converted);
 				}
 			}
 		}
@@ -646,7 +646,7 @@ static void PicManagerGenerateMaskedPic(
 	Pic p = PicCopy(original);
 	for (int i = 0; i < p.size.x * p.size.y; i++)
 	{
-		color_t c = PIXEL2COLOR(original->Data[i]);
+		color_t c = PicPx(original, i);
 		// Apply mask based on which channel each pixel is
 		if (c.g <= 2 && c.b <= 2 && !noAltMask)
 		{
@@ -659,7 +659,7 @@ static void PicManagerGenerateMaskedPic(
 		{
 			c = ColorMult(c, mask);
 		}
-		p.Data[i] = COLOR2PIXEL(c);
+		PicPxSet(&p, i, c);
 		// TODO: more channels
 	}
 	if (!PicTryMakeTex(&p))
@@ -701,13 +701,12 @@ const NamedSprites *PicManagerGetCharSprites(
 	p.Tex = NULL;
 	for (int i = 0; i < p.size.x * p.size.y; i++)
 	{
-		if (op->Data[i] == 0)
+		if (PicPxTransparent(op, i))
 		{
 			continue;
 		}
-		const color_t c = PIXEL2COLOR(op->Data[i]);
-		p.Data[i] =
-			COLOR2PIXEL(ColorMult(c, CharColorsGetChannelMask(colors, c.a)));
+		const color_t c = PicPx(op, i);
+		PicPxSet(&p, i, ColorMult(c, CharColorsGetChannelMask(colors, c.a)));
 	}
 	if (!PicTryMakeTex(&p))
 	{

@@ -25,16 +25,32 @@
 */
 #pragma once
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include <SDL_render.h>
 
 #include "vector.h"
+
+// Pixel storage format of a Pic's Data buffer.
+// Stage 2C introduces this so individual pics can move off ARGB8888 to save
+// memory; this task (2C-1) keeps every pic ARGB8888 and only routes access
+// through the accessors below, so behaviour is unchanged.
+typedef enum
+{
+	PIC_FMT_ARGB8888 = 0, // 4 B/px -- desktop always; PICOS until converted
+	PIC_FMT_RGB565 = 1,   // 2 B/px + PICOS_RGB565_CKEY transparency
+	PIC_FMT_LA8 = 2,      // 2 B/px: low byte L, high byte A (channel index); 0x0000 = transparent
+} PicFormat;
 
 typedef struct
 {
 	struct vec2i size;
 	struct vec2i offset;
 	bool isHD;
-	Uint32 *Data;
+	uint8_t fmt;       // PicFormat; desktop build keeps PIC_FMT_ARGB8888
+	void *Data;        // Uint32* (ARGB8888) or uint16_t* (RGB565/LA8)
+	uint8_t *Channels; // style pics only (Task 3): 2-bit/px packed map; else NULL
 	SDL_Texture *Tex;
 } Pic;
 
@@ -46,6 +62,16 @@ Uint32 ColorToPixel(
 	PixelToColor(gGraphicsDevice.Format, gGraphicsDevice.Format->Ashift, _p)
 #define COLOR2PIXEL(_c) \
 	ColorToPixel(gGraphicsDevice.Format, gGraphicsDevice.Format->Ashift, _c)
+
+// Format-aware pixel accessors -- every read/write of a Pic's Data buffer
+// must go through these (never index Data directly) so a pic's storage
+// format can change without touching call sites. Only these accessors'
+// implementations (pic.c) are allowed to branch on p->fmt.
+size_t PicPxBytes(const Pic *p);                          // bytes per pixel: 4 or 2
+color_t PicPx(const Pic *p, int i);                        // format-aware read
+void PicPxSet(Pic *p, int i, color_t c);                   // format-aware write
+bool PicPxTransparent(const Pic *p, int i);                // whole-word 0 / CKEY / A==0
+void PicPxCopy(Pic *dst, int di, const Pic *src, int si);  // raw same-format copy
 
 void PicLoad(
 	Pic *p, const struct vec2i size, const struct vec2i offset,

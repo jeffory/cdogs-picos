@@ -37,6 +37,7 @@
 
 #ifdef PICOS
 #include "picos_heap.h"
+#include "picos_sdl_impl.h"
 #endif
 
 map_t textureDebugger = NULL;
@@ -70,6 +71,121 @@ static struct vec2i PicPixelSize(const Pic *p)
 	return p->size;
 }
 
+// ─── Format-aware pixel accessors ──────────────────────────────────────
+// The only code allowed to branch on Pic::fmt. Everything else in the
+// codebase reads/writes pixels exclusively through these.
+size_t PicPxBytes(const Pic *p)
+{
+	switch (p->fmt)
+	{
+	case PIC_FMT_RGB565:
+	case PIC_FMT_LA8:
+		return sizeof(uint16_t);
+	case PIC_FMT_ARGB8888:
+	default:
+		return sizeof(Uint32);
+	}
+}
+color_t PicPx(const Pic *p, int i)
+{
+	switch (p->fmt)
+	{
+#ifdef PICOS
+	case PIC_FMT_RGB565:
+	{
+		const uint16_t px = ((const uint16_t *)p->Data)[i];
+		if (px == PICOS_RGB565_CKEY)
+		{
+			// Matches the pre-RGB565 sentinel: a transparent source pixel
+			// was stored as a whole-zero word, i.e. (r,g,b,a) = (0,0,0,0).
+			return (color_t){0, 0, 0, 0};
+		}
+		uint32_t r, g, b;
+		picos_unpack565(px, &r, &g, &b);
+		return (color_t){(uint8_t)r, (uint8_t)g, (uint8_t)b, 255};
+	}
+	case PIC_FMT_LA8:
+	{
+		const uint16_t px = ((const uint16_t *)p->Data)[i];
+		const uint8_t l = (uint8_t)(px & 0xFF);
+		const uint8_t a = (uint8_t)((px >> 8) & 0xFF);
+		return (color_t){l, l, l, a};
+	}
+#endif
+	case PIC_FMT_ARGB8888:
+	default:
+		return PIXEL2COLOR(((const Uint32 *)p->Data)[i]);
+	}
+}
+void PicPxSet(Pic *p, int i, color_t c)
+{
+	switch (p->fmt)
+	{
+#ifdef PICOS
+	case PIC_FMT_RGB565:
+	{
+		// Reuse the existing ARGB8888->RGB565 helper (alpha<128 -> CKEY)
+		// rather than re-deriving the threshold here.
+		const uint32_t argb = ((uint32_t)c.a << 24) | ((uint32_t)c.r << 16) |
+			((uint32_t)c.g << 8) | c.b;
+		((uint16_t *)p->Data)[i] = picos_argb_to_565(argb);
+		return;
+	}
+	case PIC_FMT_LA8:
+	{
+		const uint8_t l = (uint8_t)MAX(c.r, MAX(c.g, c.b));
+		((uint16_t *)p->Data)[i] = (uint16_t)(l | ((uint16_t)c.a << 8));
+		return;
+	}
+#endif
+	case PIC_FMT_ARGB8888:
+	default:
+		((Uint32 *)p->Data)[i] = COLOR2PIXEL(c);
+		return;
+	}
+}
+bool PicPxTransparent(const Pic *p, int i)
+{
+	switch (p->fmt)
+	{
+#ifdef PICOS
+	case PIC_FMT_RGB565:
+		return ((const uint16_t *)p->Data)[i] == PICOS_RGB565_CKEY;
+	case PIC_FMT_LA8:
+		return ((const uint16_t *)p->Data)[i] == 0x0000;
+#endif
+	case PIC_FMT_ARGB8888:
+	default:
+		return ((const Uint32 *)p->Data)[i] == 0;
+	}
+}
+void PicPxCopy(Pic *dst, int di, const Pic *src, int si)
+{
+	CASSERT(dst->fmt == src->fmt, "PicPxCopy format mismatch");
+	const size_t bpp = PicPxBytes(src);
+	memcpy((uint8_t *)dst->Data + (size_t)di * bpp,
+		(const uint8_t *)src->Data + (size_t)si * bpp, bpp);
+}
+
+// Number of bytes needed to store a 2-bit-per-pixel Channels map for
+// `count` pixels (4 pixels/byte). Channels is always NULL until Task 3;
+// this sizing is exercised now so PicCopy/PicShrink can't forget an owner.
+static size_t PicChannelsBytes(const int count)
+{
+	return ((size_t)count + 3) / 4;
+}
+static uint8_t PicChannelGet(const uint8_t *channels, const int i)
+{
+	return (uint8_t)((channels[i / 4] >> ((i % 4) * 2)) & 0x3);
+}
+static void PicChannelSet(uint8_t *channels, const int i, const uint8_t value)
+{
+	const int byteIdx = i / 4;
+	const int shift = (i % 4) * 2;
+	channels[byteIdx] = (uint8_t)(
+		(channels[byteIdx] & ~(0x3 << shift)) | ((value & 0x3) << shift));
+}
+
 void PicLoad(
 	Pic *p, const struct vec2i size, const struct vec2i offset, const SDL_Surface *image, const bool isHD)
 {
@@ -82,13 +198,14 @@ void PicLoad(
 		p->size = svec2i_scale_divide(p->size, 2);
 	}
 	p->offset = svec2i_zero();
-	CMALLOC(p->Data, size.x * size.y * sizeof *((Pic *)0)->Data);
+	p->fmt = PIC_FMT_ARGB8888;
+	CMALLOC(p->Data, (size_t)size.x * size.y * PicPxBytes(p));
 	if (p->Data == NULL)
 	{
 		return;
 	}
 #ifdef PICOS
-	g_picos_pic_data_bytes += (size_t)size.x * size.y * sizeof *p->Data;
+	g_picos_pic_data_bytes += (size_t)size.x * size.y * PicPxBytes(p);
 	g_picos_pic_count++;
 	picos_gfx_bytes_peak_sample();
 #endif
@@ -104,11 +221,11 @@ void PicLoad(
 		// This is because transparency blitting checks entire pixel
 		if (c.a == 0)
 		{
-			p->Data[i] = 0;
+			PicPxSet(p, i, (color_t){0, 0, 0, 0});
 		}
 		else
 		{
-			p->Data[i] = COLOR2PIXEL(c);
+			PicPxSet(p, i, c);
 		}
 		if ((i + 1) % size.x == 0)
 		{
@@ -164,7 +281,7 @@ bool PicTryMakeTex(Pic *p)
 	   byte-identical second copy of p->Data.  Borrow it instead.
 	   Safe because PicFree destroys Tex before CFREE(pic->Data), and
 	   PicShrink calls back here after replacing Data. */
-	p->Tex = PicosTextureBorrow(p->Data, size.x, size.y);
+	p->Tex = PicosTextureBorrow(p->Data, size.x, size.y, p->fmt);
 	if (p->Tex == NULL)
 	{
 		LOG(LM_GFX, LL_ERROR, "cannot borrow texture");
@@ -215,9 +332,16 @@ Pic PicCopy(const Pic *src)
 {
 	Pic p = *src;
 	const struct vec2i psize = PicPixelSize(src);
-	const size_t size = psize.x * psize.y * sizeof *p.Data;
+	const size_t size = (size_t)psize.x * psize.y * PicPxBytes(src);
 	CMALLOC(p.Data, size);
 	memcpy(p.Data, src->Data, size);
+	p.Channels = NULL;
+	if (src->Channels != NULL)
+	{
+		const size_t channelsSize = PicChannelsBytes(psize.x * psize.y);
+		CMALLOC(p.Channels, channelsSize);
+		memcpy(p.Channels, src->Channels, channelsSize);
+	}
 #ifdef PICOS
 	g_picos_pic_data_bytes += size;
 	g_picos_pic_count++;
@@ -261,13 +385,15 @@ void PicFree(Pic *pic)
 	{
 		const struct vec2i dataSize = PicPixelSize(pic);
 		g_picos_pic_data_bytes -=
-			(size_t)dataSize.x * dataSize.y * sizeof *pic->Data;
+			(size_t)dataSize.x * dataSize.y * PicPxBytes(pic);
 		g_picos_pic_count--;
 	}
 #endif
 	pic->size = svec2i_zero();
 	CFREE(pic->Data);
 	pic->Data = NULL;
+	CFREE(pic->Channels);
+	pic->Channels = NULL;
 }
 
 bool PicIsNone(const Pic *pic)
@@ -285,8 +411,8 @@ void PicTrim(Pic *pic, const bool xTrim, const bool yTrim)
 	{
 		for (pos.x = 0; pos.x < size.x; pos.x++)
 		{
-			const Uint32 pixel = *(pic->Data + pos.x + pos.y * size.x);
-			if (pixel > 0)
+			const int idx = pos.x + pos.y * size.x;
+			if (!PicPxTransparent(pic, idx))
 			{
 				min.x = MIN(min.x, pos.x);
 				min.y = MIN(min.y, pos.y);
@@ -316,20 +442,38 @@ void PicTrim(Pic *pic, const bool xTrim, const bool yTrim)
 void PicShrink(Pic *pic, const struct vec2i size, const struct vec2i offset)
 {
 	// Trim by copying pixels
-	Uint32 *newData;
-	CMALLOC(newData, size.x * size.y * sizeof *newData);
+	void *newData;
+	const size_t bpp = PicPxBytes(pic);
+	CMALLOC(newData, (size_t)size.x * size.y * bpp);
 	if (newData == NULL)
 	{
 		return;
+	}
+	// Wrap the new buffer in a same-format Pic so PicPxCopy can move raw
+	// pixels into it; only fmt/Data are read by PicPxCopy.
+	Pic newPic;
+	memset(&newPic, 0, sizeof newPic);
+	newPic.fmt = pic->fmt;
+	newPic.Data = newData;
+	uint8_t *newChannels = NULL;
+	if (pic->Channels != NULL)
+	{
+		CMALLOC(newChannels, PicChannelsBytes(size.x * size.y));
 	}
 	for (struct vec2i pos = svec2i_zero(); pos.y < size.y; pos.y++)
 	{
 		for (pos.x = 0; pos.x < size.x; pos.x++)
 		{
-			Uint32 *target = newData + pos.x + pos.y * size.x;
+			const int dstIdx = pos.x + pos.y * size.x;
 			const int srcIdx =
 				pos.x + offset.x + (pos.y + offset.y) * pic->size.x;
-			*target = *(pic->Data + srcIdx);
+			PicPxCopy(&newPic, dstIdx, pic, srcIdx);
+			if (newChannels != NULL)
+			{
+				PicChannelSet(
+					newChannels, dstIdx,
+					PicChannelGet(pic->Channels, srcIdx));
+			}
 		}
 	}
 	// Replace the old data
@@ -337,13 +481,15 @@ void PicShrink(Pic *pic, const struct vec2i size, const struct vec2i offset)
 	{
 		const struct vec2i oldSize = PicPixelSize(pic);
 		g_picos_pic_data_bytes -=
-			(size_t)oldSize.x * oldSize.y * sizeof *pic->Data;
-		g_picos_pic_data_bytes += (size_t)size.x * size.y * sizeof *newData;
+			(size_t)oldSize.x * oldSize.y * PicPxBytes(pic);
+		g_picos_pic_data_bytes += (size_t)size.x * size.y * bpp;
 		picos_gfx_bytes_peak_sample();
 	}
 #endif
 	CFREE(pic->Data);
 	pic->Data = newData;
+	CFREE(pic->Channels);
+	pic->Channels = newChannels;
 	pic->size = size;
 	if (pic->isHD)
 	{
@@ -359,8 +505,8 @@ color_t PicGetRandomColor(const Pic *p)
 	const struct vec2i size = PicPixelSize(p);
 	for (;;)
 	{
-		const uint32_t px = p->Data[rand() % (size.x * size.y)];
-		const color_t c = PIXEL2COLOR(px);
+		const int i = rand() % (size.x * size.y);
+		const color_t c = PicPx(p, i);
 		if (c.a > 0)
 		{
 			return c;

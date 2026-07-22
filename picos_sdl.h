@@ -689,8 +689,9 @@ static inline SDL_bool SDL_RenderIsClipEnabled(SDL_Renderer *r) { (void)r; retur
 
 /* Texture — implemented */
 extern SDL_Texture *SDL_CreateTexture(SDL_Renderer *r, Uint32 f, int a, int w, int h);
-/* PicOS extension: texture over caller-owned pixels (no copy). */
-extern SDL_Texture *PicosTextureBorrow(uint32_t *pixels, int w, int h);
+/* PicOS extension: texture over caller-owned pixels (no copy). pic_fmt
+   mirrors cdogs' PicFormat enum (pic.h): 0=ARGB8888, 1=RGB565, 2=LA8. */
+extern SDL_Texture *PicosTextureBorrow(void *pixels, int w, int h, uint8_t pic_fmt);
 extern SDL_Texture *SDL_CreateTextureFromSurface(SDL_Renderer *r, SDL_Surface *s);
 extern void SDL_DestroyTexture(SDL_Texture *t);
 extern int SDL_SetTextureBlendMode(SDL_Texture *t, SDL_BlendMode m);
