@@ -124,16 +124,22 @@ void PicLoad(
 	const bool buildChannelMap, const int charHeadPart);
 bool PicTryMakeTex(Pic *p);
 Pic PicCopy(const Pic *src);
+// Like PicCopy, but never allocates/copies a Channels map even if `src` has
+// one -- for cache outputs that are cached-by-name finals, never re-masked,
+// so a Channels map would just be dead weight (see PicManagerGenerateMaskedPic,
+// pic_manager.c, which used to PicCopy + immediately PicChannelsFree its own
+// copy before Stage 2D Task 3's cleanup).
+Pic PicCopyNoChannels(const Pic *src);
 // Like PicCopy, but the copy is converted to a different pixel format
 // (per-pixel, via PicPx/PicPxSet) rather than a raw memcpy of same-format
 // bytes. Used for cache outputs whose *destination* role calls for a
 // different format than their source -- e.g. PicManagerGetCharSprites'
-// per-CharColors recoloured sprite cache, which reads an LA8 source but
-// stores a real-colour RGB565 final (see pic_manager.c). The output never
-// carries a Channels map (matching PicManagerGenerateMaskedPic's use of
-// PicChannelsFree on its own PicCopy output) since these are cached-by-name
-// finals, never re-masked. Byte accounting is sized by the DESTINATION
-// format, not the source's.
+// per-CharColors recoloured sprite cache (desktop only as of Stage 2D; PICOS
+// recolours at blit time instead -- see draw_actor.c), which reads an LA8
+// source but stores a real-colour RGB565 final (see pic_manager.c). The
+// output never carries a Channels map, same reasoning as PicCopyNoChannels
+// above, since these are cached-by-name finals, never re-masked. Byte
+// accounting is sized by the DESTINATION format, not the source's.
 Pic PicCopyToFormat(const Pic *src, const PicFormat fmt);
 void PicFree(Pic *pic);
 bool PicIsNone(const Pic *pic);

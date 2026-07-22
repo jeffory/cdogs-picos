@@ -207,12 +207,16 @@ void PicChannelSet(Pic *p, int i, int ch)
 	}
 	PicChannelsRawSet(p->Channels, i, (uint8_t)ch);
 }
-// Free just the Channels map, e.g. for a masked-pic output that PicCopy
-// deep-copied a map into but will never be re-masked (a cache lookup by
-// name, never re-fed to PicManagerGenerateMaskedPic). No-op if there is no
-// map. Centralized here (rather than a bare CFREE at the call site) so the
-// byte accounting stays correct without call sites needing to know
-// PicPixelSize's HD-doubling rule.
+// Free just the Channels map from a Pic that has one but will never need it
+// again (a cached-by-name final, never re-fed to something that re-derives
+// masking from Channels). No-op if there is no map. Centralized here (rather
+// than a bare CFREE at the call site) so the byte accounting stays correct
+// without call sites needing to know PicPixelSize's HD-doubling rule.
+// PicManagerGenerateMaskedPic used to be exactly this case (PicCopy, whose
+// deep copy included a Channels map, immediately followed by a free of that
+// same copy) until Stage 2D Task 3 switched it to PicCopyNoChannels, which
+// never allocates the map in the first place; kept as a general utility for
+// any future caller in the same situation.
 void PicChannelsFree(Pic *p)
 {
 	if (p->Channels == NULL)
@@ -596,7 +600,7 @@ bool PicTryMakeTex(Pic *p)
 }
 
 // Note: does not copy the texture
-Pic PicCopy(const Pic *src)
+static Pic PicCopyInternal(const Pic *src, const bool copyChannels)
 {
 	Pic p = *src;
 	const struct vec2i psize = PicPixelSize(src);
@@ -605,7 +609,7 @@ Pic PicCopy(const Pic *src)
 	memcpy(p.Data, src->Data, size);
 	p.Channels = NULL;
 	size_t channelsSize = 0;
-	if (src->Channels != NULL)
+	if (copyChannels && src->Channels != NULL)
 	{
 		channelsSize = PicChannelsBytes(psize.x * psize.y);
 		CMALLOC(p.Channels, channelsSize);
@@ -619,6 +623,22 @@ Pic PicCopy(const Pic *src)
 	p.Tex = NULL;
 	p.isHD = src->isHD;
 	return p;
+}
+Pic PicCopy(const Pic *src)
+{
+	return PicCopyInternal(src, true);
+}
+// 2C final review / Stage 2D Task 3: PicManagerGenerateMaskedPic used to call
+// PicCopy (copying `src`'s Channels map) only to immediately PicChannelsFree
+// its own copy before caching the result -- a malloc+memcpy the very next
+// few lines then discarded. This variant skips the Channels allocation
+// entirely for callers that never need it, removing that churn with
+// identical net byte accounting (PicCopyInternal's peak-sample add already
+// omits channelsSize when copyChannels is false, matching what the
+// alloc-then-free pair used to net out to).
+Pic PicCopyNoChannels(const Pic *src)
+{
+	return PicCopyInternal(src, false);
 }
 
 // Like PicCopy, but converts to a different pixel format instead of doing a
@@ -647,6 +667,16 @@ Pic PicCopyToFormat(const Pic *src, const PicFormat fmt)
 	CMALLOC(p.Data, size);
 	if (p.Data == NULL)
 	{
+		// 2C final review: this Pic is returned with Data==NULL and nothing
+		// downstream checks for that (its one caller, PicManagerGetCharSprites
+		// in pic_manager.c, is desktop-only as of Stage 2D Task 3). On
+		// desktop, CMALLOC's _CCHECKALLOC (utils.h) exit(1)s on OOM before
+		// returning, so p.Data is never actually NULL here -- this guard is
+		// vestigial there. It only does anything on PICOS, where CMALLOC logs
+		// and returns NULL instead of aborting; kept (rather than removed)
+		// against a hypothetical future PICOS caller of this function, since
+		// falling through to PicPxSet against a NULL p.Data would be worse
+		// than this early, harmless return.
 		return p;
 	}
 	for (int i = 0; i < psize.x * psize.y; i++)

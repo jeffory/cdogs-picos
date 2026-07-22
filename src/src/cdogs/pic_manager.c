@@ -708,13 +708,18 @@ static void PicManagerGenerateMaskedPic(
 	//   !noAltMask: ALT, ALT_GRAY -> alt treatment; PRIMARY -> mask;
 	//               LITERAL -> pass through.
 	//   noAltMask:  ALT_GRAY, PRIMARY -> mask; ALT, LITERAL -> pass through.
-	Pic p = PicCopy(original);
+	// The output is a final, cached-by-name pic (looked up by
+	// PicManagerGetMaskedPic, never re-masked), so a Channels map copied from
+	// `original` would just be dead weight -- use the variant that never
+	// allocates one instead of PicCopy + an immediate PicChannelsFree (2C
+	// final review / Stage 2D Task 3 cleanup; see PicCopyNoChannels, pic.c).
+	Pic p = PicCopyNoChannels(original);
 	for (int i = 0; i < p.size.x * p.size.y; i++)
 	{
 		if (PicPxTransparent(original, i))
 		{
-			// Already copied as CKEY by PicCopy; masking would be a no-op
-			// anyway (ColorMult keeps alpha at 0), so skip outright.
+			// Already copied as CKEY by PicCopyNoChannels; masking would be
+			// a no-op anyway (ColorMult keeps alpha at 0), so skip outright.
 			continue;
 		}
 		const int ch = PicChannelGet(original, i);
@@ -736,7 +741,7 @@ static void PicManagerGenerateMaskedPic(
 				c = ColorMult(PicPx(original, i), mask);
 				modified = true;
 			}
-			// LITERAL: pass through unmodified (already in p via PicCopy)
+			// LITERAL: pass through unmodified (already in p via PicCopyNoChannels)
 		}
 		else
 		{
@@ -753,10 +758,6 @@ static void PicManagerGenerateMaskedPic(
 		}
 		// TODO: more channels
 	}
-	// The output is a final, cached-by-name pic (looked up by
-	// PicManagerGetMaskedPic, never re-masked) -- the Channels map PicCopy
-	// deep-copied from `original` is dead weight here. Free it.
-	PicChannelsFree(&p);
 	if (!PicTryMakeTex(&p))
 	{
 		p.Tex = NULL;
@@ -774,9 +775,37 @@ void PicManagerGenerateMaskedStylePic(
 	PicManagerGenerateMaskedPic(pm, buf, mask, maskAlt, noAltMask);
 }
 
+// Stage 2D Task 3: this whole function is unreachable on PICOS. Task 2 made
+// all five draw_actor.c wrappers (GetHeadPic/GetHeadPartPic/GetBodyPic/
+// GetLegsPic/GetGunPic -- the function's only callers anywhere in the
+// codebase) call PicManagerGetSprites directly on PICOS and recolour at blit
+// time via PicosBlitSetCharColors instead of baking a per-CharColors
+// sprite-sheet copy through here, which is the entire reason this function
+// existed. Desktop keeps the real bake body (below, #ifndef PICOS) verbatim
+// -- a GPU renderer has no per-pixel blit hook to recolour from base sprites,
+// so it still needs a pre-baked, real-colour copy per CharColors. Any future
+// change to chars/ recolouring must touch BOTH paths (see the PICOS branch
+// note above GetHeadPic, draw_actor.c). The bake body's own Amendment-B
+// tri-state LA8/RGB565/ARGB8888 input check (removed here, it was never
+// desktop's concern in the first place -- desktop's PicLoad always forces
+// chars/ pics to PIC_FMT_ARGB8888, see pic.c, so the ambiguity that check
+// guarded against is a PICOS-only condition) is compiled out along with the
+// rest of the bake rather than left as unreachable dead code in the PICOS
+// binary; the AfterAdd(pm) per-bake rescan disappears with it too.
 const NamedSprites *PicManagerGetCharSprites(
 	PicManager *pm, const char *name, const CharColors *colors)
 {
+#ifdef PICOS
+	// Reaching here on PICOS is an invariant violation, not a normal path --
+	// every real caller was moved off this function in Task 2. Log loudly and
+	// fall back to the base (uncoloured) sprites rather than crash or
+	// silently bake.
+	LOG(LM_MAIN, LL_ERROR,
+		"PicManagerGetCharSprites reached on PICOS for '%s' -- unreachable "
+		"since Stage 2D Task 2; returning uncoloured sprites",
+		name);
+	return PicManagerGetSprites(pm, name);
+#else
 	char buf[CDOGS_PATH_MAX];
 	CharColorsGetMaskedName(buf, name, colors);
 	// Get or generate masked sprites
@@ -790,32 +819,6 @@ const NamedSprites *PicManagerGetCharSprites(
 	{
 		return NULL;
 	}
-#ifdef PICOS
-	// Amendment B: a chars/ pic can now be LA8, RGB565, or ARGB8888 (decided
-	// per pic by PicLoadClassifyCharsFormat, pic.c) -- the loop below reads
-	// every pixel through PicPx/PicPxSet/PicPxTransparent, which already
-	// branch correctly on all three, so any of them is fine here. What is
-	// NOT fine is some fourth, unexpected format (an invariant drift, e.g. a
-	// future PicFormat value nobody taught this function about): reading one
-	// through the wrong accessor branch would misinterpret its bytes rather
-	// than just look wrong, so bail before touching any pixel data or
-	// populating the cache. CASSERT compiles out on-device -- this is the
-	// explicit fallback for that. Checked up front (not per-pic inside the
-	// conversion loop below) so a violation can never leave a partially-
-	// recoloured, permanently-cached NamedSprites behind under `buf`.
-	CA_FOREACH(Pic, opCheck, ons->pics)
-	const bool fmtOk = opCheck->fmt == PIC_FMT_LA8 ||
-		opCheck->fmt == PIC_FMT_RGB565 || opCheck->fmt == PIC_FMT_ARGB8888;
-	CASSERT(fmtOk, "GetCharSprites source has unrecognised format");
-	if (!fmtOk)
-	{
-		LOG(LM_MAIN, LL_ERROR,
-			"cannot recolor sprites '%s': pic %d has unrecognised format %d",
-			name, _ca_index, opCheck->fmt);
-		return NULL;
-	}
-	CA_FOREACH_END()
-#endif
 	NamedSprites *nsp = AddNamedSprites(pm->customSprites, buf);
 	CA_FOREACH(Pic, op, ons->pics)
 	// Recoloured output holds real colours (mask-multiplied), not channel
@@ -839,6 +842,7 @@ const NamedSprites *PicManagerGetCharSprites(
 	CA_FOREACH_END()
 	AfterAdd(pm);
 	return nsp;
+#endif
 }
 
 static void GetMaskedName(
