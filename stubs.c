@@ -31,12 +31,14 @@ static uint8_t *g_heap_ptr = g_heap;
 
 /* Remaining never-allocated heap (sbrk watermark; freed blocks recycled by
  * newlib malloc are not visible here, so this is a conservative floor).
- * Semantics are load-bearing for the LoadImgToSurface reserve guard —
- * see picos_heap.h before changing. */
+ * Reporting only since 2B. */
 size_t picos_heap_free(void) {
     return (size_t)((g_heap + HEAP_SIZE) - g_heap_ptr);
 }
 
+/* Watermark plus newlib's free list: the real free number.  Load-bearing —
+ * the LoadImgToSurface reserve guard compares this against its reserve;
+ * see picos_heap.h before changing. */
 size_t picos_heap_free_true(void) {
     struct mallinfo mi = mallinfo();
     return (size_t)((g_heap + HEAP_SIZE) - g_heap_ptr) + (size_t)mi.fordblks;
@@ -350,10 +352,15 @@ int chdir(const char *path) { (void)path; return 0; }
  * calls opendir on the parent directory, so we need at least 2 active).
  * MAX_DIR_ENTRIES must cover the largest game dir: data/graphics has 344
  * top-level entries — at the old cap of 128, two thirds of the sprites were
- * silently never loaded. Each slot: 512 × 64B = 32KB, pool of 4 = 128KB BSS. */
+ * silently never loaded. Each slot: 512 × 64B = 32KB.
+ * DIR_POOL_SIZE must cover PicManagerLoadDir's recursion depth, which holds
+ * one open DIR per level: graphics/door/<style>/base/key is 5 deep, so at
+ * the old pool of 4 every door key/ subdirectory failed opendir and its
+ * sprites silently never loaded (POOL EXHAUSTED warnings). 8 = deepest
+ * observed (5) plus headroom; 8 × 32KB = 256KB BSS. */
 #define MAX_DIR_ENTRIES 512
 #define MAX_DIR_NAME 64
-#define DIR_POOL_SIZE 4
+#define DIR_POOL_SIZE 8
 typedef struct {
     char entries[MAX_DIR_ENTRIES][MAX_DIR_NAME];
     int count;
