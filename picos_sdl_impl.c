@@ -311,9 +311,13 @@ SDL_Texture *SDL_CreateTexture(SDL_Renderer *r, Uint32 format, int access,
      0 = PIC_FMT_ARGB8888, 1 = PIC_FMT_RGB565, 2 = PIC_FMT_LA8.
    Sub-project 2C converted pics away from ARGB8888 one role at a time: Task 2
    added the RGB565 mapping ("final" pics), Task 3 moved style pics onto it
-   too, and Task 4 adds the LA8 mapping for chars/ pics -- no pic reaches
-   this function as ARGB8888 anymore, but the case stays as a defensive
-   default. */
+   too, and Task 4 added the LA8 mapping for chars/ pics. Task 4's real-asset
+   scan then found pure LA8 grays out chromatic pixels the colour-key
+   classifier can't name (gun accents, hat decorations, the explosion fire
+   palette) -- Amendment B has pic.c decide chars/ format per pic instead, so
+   a measured ~21/136 chars/ files (mostly small gun/hat sheets) DO still
+   reach this function as ARGB8888. Case 0 is therefore a real, exercised
+   path again, not just a defensive default. */
 SDL_Texture *PicosTextureBorrow(void *pixels, int w, int h, uint8_t pic_fmt) {
     if (!pixels || w <= 0 || h <= 0) return NULL;
     PicosTexture *t = calloc(1, sizeof(PicosTexture));

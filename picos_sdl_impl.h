@@ -15,10 +15,14 @@ struct PicoCalcAPI;
    The shim renders in RGB565 (host byte order — display->drawImageNN
    byte-swaps to the panel's big-endian order itself).  Textures that
    BORROW Pic->Data mirror whatever format that Pic settled on --
-   PICOS_TEXFMT_ARGB8888 for style pics before Task 3 (none remain after
-   Stage 2C), PICOS_TEXFMT_RGB565 for "final" pics (Task 2) and style pics
-   (Task 3), or PICOS_TEXFMT_LA8 for chars/ pics (Task 4); textures the shim
-   OWNS (the window-sized render targets) are always RGB565. */
+   PICOS_TEXFMT_RGB565 for "final" pics (Task 2) and style pics (Task 3);
+   chars/ pics (Task 4, corrected by Amendment B) are decided per pic by a
+   load-time pre-pass (pic.c's PicLoadClassifyCharsFormat) and land on
+   PICOS_TEXFMT_LA8 (most of them -- pure luma+alpha is lossless), RGB565
+   (a few with real colour but no recognised colour key), or ARGB8888 (a
+   few with both real colour AND a colour key, or partial alpha -- gun/hat
+   sheets, mostly). Textures the shim OWNS (the window-sized render
+   targets) are always RGB565. */
 #define PICOS_TEXFMT_ARGB8888  0   /* 4 bytes/px, borrowed Pic->Data  */
 #define PICOS_TEXFMT_RGB565    1   /* 2 bytes/px, shim-owned OR borrowed */
 #define PICOS_TEXFMT_LA8       2   /* 2 bytes/px, borrowed Pic->Data (chars/):

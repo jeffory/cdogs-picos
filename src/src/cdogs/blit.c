@@ -131,6 +131,29 @@ CharColorType CharColorTypeFromColor(const color_t c, const CharColorType headPa
 
 	return CHAR_COLOR_COUNT;
 }
+CharPixelClass CharColorClassifyPixel(
+	const color_t c, const CharColorType headPartColor)
+{
+	const CharColorType t = CharColorTypeFromColor(c, headPartColor);
+	if (t != CHAR_COLOR_COUNT)
+	{
+		return CHAR_PIXEL_CLASS_CHANNEL_KEY;
+	}
+	// t == CHAR_COLOR_COUNT above is returned from two different tests
+	// inside CharColorTypeFromColor: the near-grey guard (all three pairwise
+	// channel diffs < CHAR_COLOR_THRESHOLD) or the final fallthrough (no
+	// colour-key axis matched). Those are mutually exclusive and, since
+	// max(r,g,b)-min(r,g,b) equals the largest of the three pairwise diffs,
+	// re-testing the same threshold against max-min exactly recovers which
+	// one fired -- no need to duplicate the guard's per-pair logic.
+	const int maxC = MAX(MAX(c.r, c.g), c.b);
+	const int minC = MIN(MIN(c.r, c.g), c.b);
+	if (maxC - minC >= CHAR_COLOR_THRESHOLD)
+	{
+		return CHAR_PIXEL_CLASS_CHROMATIC;
+	}
+	return CHAR_PIXEL_CLASS_GREY;
+}
 CharColors CharColorsFromOneColor(const color_t color)
 {
 	CharColors c = {color, color, color, color, color, color, color, color, color};

@@ -66,6 +66,23 @@ void BlitUpdateFromBuf(GraphicsDevice *g, SDL_Texture *t);
 
 uint8_t CharColorTypeAlpha(const CharColorType t);
 CharColorType CharColorTypeFromColor(const color_t c, const CharColorType headPartColor);
+// Amendment B (cdogs Stage 2C pic-formats plan, 2026-07-22): classifies a
+// single opaque chars/ pixel for PicLoad's per-pic format pre-pass (pic.c).
+// CharColorTypeFromColor alone can't distinguish "near-grey, not a colour
+// key" from "genuinely chromatic, not a colour key" -- both return
+// CHAR_COLOR_COUNT -- but that distinction is exactly what decides whether a
+// chars/ pic can go LA8 (loses no colour: nothing chromatic-but-unkeyed is
+// in it) or must keep real RGB (gun accents, hat decorations, the explosion
+// fire palette). Reuses CharColorTypeFromColor's own CHAR_COLOR_THRESHOLD so
+// there is exactly one definition of "near-grey" in the codebase.
+typedef enum
+{
+	CHAR_PIXEL_CLASS_GREY,        // COUNT and near-grey: safe to fold to LA8
+	CHAR_PIXEL_CLASS_CHANNEL_KEY, // recognised colour key (SKIN/ARMS/etc.)
+	CHAR_PIXEL_CLASS_CHROMATIC,   // COUNT but NOT near-grey ("chromatic-COUNT")
+} CharPixelClass;
+CharPixelClass CharColorClassifyPixel(
+	const color_t c, const CharColorType headPartColor);
 CharColors CharColorsFromOneColor(const color_t color);
 color_t CharColorsGetChannelMask(const CharColors *c, const uint8_t alpha);
 void CharColorsGetMaskedName(char *buf, const char *base, const CharColors *c);

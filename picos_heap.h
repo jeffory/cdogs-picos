@@ -59,6 +59,21 @@ extern size_t g_picos_pic_bytes_peak;
 /* Images refused by the LoadImgToSurface reserve guard. */
 extern int    g_picos_img_skip_count;
 
+/* Per-PicLoad-call tally of the chars/ format pre-pass's decision (Stage 2C
+ * Amendment B, pic.c's PicLoadClassifyCharsFormat) -- one increment per
+ * frame, so a spritesheet contributes once per frame, not once per file.
+ * Reported once at the end of asset load (picos_charsfmt_report) rather than
+ * per-item, same rationale as GFXSTAT/HEAPSTAT above. */
+extern int    g_picos_chars_fmt_la8;
+extern int    g_picos_chars_fmt_rgb565;
+extern int    g_picos_chars_fmt_argb8888;
+
+/* Emit one CHARSFMT line to stderr:
+     CHARSFMT <tag> la8=<d> rgb565=<d> argb8888=<d>
+   Lets the per-pic tri-state split (Amendment B) be observed from a normal
+   load without per-item tracing. */
+void picos_charsfmt_report(const char *tag);
+
 static inline void picos_gfx_bytes_peak_sample(void) {
     const size_t total = g_picos_pic_data_bytes + g_picos_pic_tex_bytes;
     if (total > g_picos_pic_bytes_peak)

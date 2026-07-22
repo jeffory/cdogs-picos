@@ -34,10 +34,15 @@
 
 // Pixel storage format of a Pic's Data buffer.
 // Stage 2C introduces this so individual pics can move off ARGB8888 to save
-// memory. Task 2C-2 moves "final" pics (everything that isn't chars/ or a
-// wall|tile|door|exits|keys style pic) to PIC_FMT_RGB565; chars/ and style
-// pics stay PIC_FMT_ARGB8888 until Tasks 3-4. See PicManagerAdd's
-// classification (pic_manager.c) and font.c (always RGB565).
+// memory. "Final" pics (everything that isn't chars/ or a
+// wall|tile|door|exits|keys style pic) and style pics are always
+// PIC_FMT_RGB565. chars/ pics are the exception: PicLoad decides their
+// format itself, per pic, from a load-time pre-pass over the exact ARGB8888
+// pixels (PicLoadClassifyCharsFormat, pic.c) -- most land on PIC_FMT_LA8
+// (lossless for them), a few keep PIC_FMT_RGB565 or full PIC_FMT_ARGB8888
+// where real, unkeyed colour would otherwise be lost (Amendment B to the
+// cdogs Stage 2C pic-formats plan). See PicManagerAdd's classification
+// (pic_manager.c, a placeholder for chars/) and font.c (always RGB565).
 typedef enum
 {
 	PIC_FMT_ARGB8888 = 0, // 4 B/px -- desktop always; PICOS until converted
@@ -96,15 +101,23 @@ void PicPxCopy(Pic *dst, int di, const Pic *src, int si);  // raw same-format co
 
 // `charHeadPart` is a `CharColorType` value (see blit.h) or -1.  Pass -1 for
 // every non-chars/ pic (font.c, style pics, "final" pics): PicLoad skips the
-// colour-key classification entirely and stores the source pixel verbatim.
-// For chars/ pics (pic_manager.c's PicManagerAdd), pass the head-part base
-// colour (HAIR, or the FACEHAIR/HAT/GLASSES override for those sub-prefixes)
-// so PicLoad can reproduce -- once, at load time -- what used to be a
+// colour-key classification entirely, stores the source pixel verbatim, and
+// uses `fmt` exactly as given. For chars/ pics (pic_manager.c's
+// PicManagerAdd), pass the head-part base colour (HAIR, or the
+// FACEHAIR/HAT/GLASSES override for those sub-prefixes) -- `fmt` is then
+// IGNORED: PicLoad decides the real format itself (Amendment B) from a
+// pre-pass over the exact ARGB8888 pixels, because pure LA8 (one luma byte)
+// would grey out chromatic pixels the colour-key classifier can't name (gun
+// accents, hat decorations, the explosion fire palette). Whatever format it
+// picks, PicLoad reproduces -- once, at load time -- what used to be a
 // separate post-load pass over the pic: classify each opaque pixel's colour
 // key (CharColorTypeFromColor) and write back grey + a special
-// "channel index" alpha (CharColorTypeAlpha). pic.h stays free of blit.h (it
-// would create an include cycle -- blit.h includes pic.h), hence the plain
-// int rather than the CharColorType type itself.
+// "channel index" alpha (CharColorTypeAlpha), UNLESS the pixel is
+// genuinely chromatic and unkeyed, in which case its real colour is kept
+// (only representable when the resolved format is RGB565 or ARGB8888).
+// pic.h stays free of blit.h (it would create an include cycle -- blit.h
+// includes pic.h), hence the plain int rather than the CharColorType type
+// itself.
 void PicLoad(
 	Pic *p, const struct vec2i size, const struct vec2i offset,
 	const SDL_Surface *image, const bool isHD, const PicFormat fmt,

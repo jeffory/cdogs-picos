@@ -62,15 +62,21 @@ void PicManagerInit(PicManager *pm)
 static NamedPic *AddNamedPic(map_t pics, const char *name, const Pic *p);
 static NamedSprites *AddNamedSprites(map_t sprites, const char *name);
 static void AfterAdd(PicManager *pm);
-// Stage 2C-4: chars/ (+ head-part sub-prefixes) loads as LA8 -- one luma
-// byte plus an alpha byte that doubles as either real transparency (0) or a
-// "channel index" (246-254, see blit.c's CharColorTypeAlpha /
-// CharColorsGetChannelMask) once PicLoad's load-time colour-key
-// classification has run (moved there from a separate post-load pass that
-// used to live right here in PicManagerAdd -- see the head-part detection
-// below and PicLoad's chars/ branch in pic.c). Recoloured (per-CharColors)
-// output copies are PIC_FMT_RGB565 instead (PicManagerGetCharSprites) since
-// they hold real colours, not channel indices. The style-maskable prefixes
+// Stage 2C-4 + Amendment B: chars/ (+ head-part sub-prefixes) pics do NOT get
+// a fixed format here -- PicLoad decides, per pic, from a pre-pass over the
+// exact ARGB8888 pixels (PicLoadClassifyCharsFormat, pic.c), because pure LA8
+// (one luma byte + a channel-index/transparency alpha byte, see blit.c's
+// CharColorTypeAlpha/CharColorsGetChannelMask) grays out real colour on
+// pixels the colour-key classifier can't recognise (gun accents, hat
+// decorations, the explosion fire palette). Most chars/ pics still end up
+// LA8 (measured 109/136 files) since that's genuinely lossless for them; a
+// few keep RGB565 (6) or full ARGB8888 (21) instead. The `fmt` this function
+// returns for a chars/ pic is therefore only a placeholder PicLoad ignores
+// (see its `charHeadPart >= 0` branch) -- kept PIC_FMT_LA8 to document the
+// common case, not because it is authoritative. Recoloured (per-CharColors)
+// output copies are always PIC_FMT_RGB565 (PicManagerGetCharSprites) since
+// they hold real colours, not channel indices, regardless of what format
+// their LA8/RGB565/ARGB8888 source used. The style-maskable prefixes
 // (wall/tile/door/exits/keys) move to RGB565 + a load-time packed channel
 // map (PicLoad's buildChannelMap): PicManagerGenerateMaskedPic classifies
 // each pixel once, on the exact ARGB8888 surface, and stores the result in
@@ -90,6 +96,8 @@ static PicFmtClass PicManagerClassifyFmt(const char *buf)
 	};
 	if (strncmp(buf, "chars/", strlen("chars/")) == 0)
 	{
+		// Placeholder only -- PicLoad overrides this for every chars/ pic
+		// (charHeadPart >= 0). See the comment above.
 		return (PicFmtClass){PIC_FMT_LA8, false};
 	}
 	for (size_t i = 0; i < sizeof stylePrefixes / sizeof stylePrefixes[0]; i++)
@@ -305,6 +313,12 @@ void PicManagerLoad(PicManager *pm)
 	PicManagerLoadDir(pm, buf, NULL, pm->pics, pm->sprites, true);
 #ifdef PICOS
 	picos_gfx_report("picmanagerload");
+	// Amendment B: observe the chars/ tri-state format split (pic.c's
+	// PicLoadClassifyCharsFormat) from a normal load without per-item
+	// tracing -- counts are per-frame, so spritesheets contribute more than
+	// once, but the per-FILE expectation (~109/6/21) should still show
+	// through since most chars/ pics are single-frame.
+	picos_charsfmt_report("picmanagerload");
 #endif
 }
 
@@ -777,21 +791,26 @@ const NamedSprites *PicManagerGetCharSprites(
 		return NULL;
 	}
 #ifdef PICOS
-	// Every chars/ pic loads as LA8 (PicManagerClassifyFmt); reading one
-	// through the wrong PicPx/PicPxSet branch below would misinterpret its
-	// bytes rather than just look wrong, so bail before touching any pixel
-	// data or populating the cache if that invariant has drifted. CASSERT
-	// compiles out on-device -- this is the explicit fallback for that.
-	// Checked up front (not per-pic inside the conversion loop below) so a
-	// violation can never leave a partially-recoloured, permanently-cached
-	// NamedSprites behind under `buf`.
+	// Amendment B: a chars/ pic can now be LA8, RGB565, or ARGB8888 (decided
+	// per pic by PicLoadClassifyCharsFormat, pic.c) -- the loop below reads
+	// every pixel through PicPx/PicPxSet/PicPxTransparent, which already
+	// branch correctly on all three, so any of them is fine here. What is
+	// NOT fine is some fourth, unexpected format (an invariant drift, e.g. a
+	// future PicFormat value nobody taught this function about): reading one
+	// through the wrong accessor branch would misinterpret its bytes rather
+	// than just look wrong, so bail before touching any pixel data or
+	// populating the cache. CASSERT compiles out on-device -- this is the
+	// explicit fallback for that. Checked up front (not per-pic inside the
+	// conversion loop below) so a violation can never leave a partially-
+	// recoloured, permanently-cached NamedSprites behind under `buf`.
 	CA_FOREACH(Pic, opCheck, ons->pics)
-	CASSERT(opCheck->fmt == PIC_FMT_LA8, "GetCharSprites source not LA8");
-	if (opCheck->fmt != PIC_FMT_LA8)
+	const bool fmtOk = opCheck->fmt == PIC_FMT_LA8 ||
+		opCheck->fmt == PIC_FMT_RGB565 || opCheck->fmt == PIC_FMT_ARGB8888;
+	CASSERT(fmtOk, "GetCharSprites source has unrecognised format");
+	if (!fmtOk)
 	{
 		LOG(LM_MAIN, LL_ERROR,
-			"cannot recolor sprites '%s': pic %d has unexpected format %d "
-			"(want LA8)",
+			"cannot recolor sprites '%s': pic %d has unrecognised format %d",
 			name, _ca_index, opCheck->fmt);
 		return NULL;
 	}

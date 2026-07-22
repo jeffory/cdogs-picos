@@ -4,6 +4,7 @@
 */
 #include "app_abi.h"
 #include "os.h"
+#include "picos_heap.h"
 #include "picos_sdl_impl.h"
 #include <string.h>
 #include <setjmp.h>
@@ -113,6 +114,18 @@ void picos_main(const PicoCalcAPI *api,
         api->sys->log("CDOGS: PicManagerLoadDir returned for graphics_hd");
     }
     api->sys->log("CDOGS: PicManager loaded");
+#ifdef PICOS
+    // Amendment B (cdogs Stage 2C pic-formats plan): observe the chars/
+    // tri-state format split (pic.c's PicLoadClassifyCharsFormat) from a
+    // normal load. NOTE this native PICOS entry point calls
+    // PicManagerLoadDir directly (above), bypassing pic_manager.c's
+    // PicManagerLoad() wrapper entirely -- the equivalent report call left
+    // there for the desktop build's benefit never actually runs on this
+    // target, so it is called again here where the native build's own
+    // graphics-tree scan really completes.
+    picos_gfx_report("picmanagerload");
+    picos_charsfmt_report("picmanagerload");
+#endif
 
     LoadingScreenDraw(&gLoadingScreen, "Loading autosaves...", 0.1f);
     AutosaveInit(&gAutosave);

@@ -229,6 +229,86 @@ void PicChannelsFree(Pic *p)
 	p->Channels = NULL;
 }
 
+#ifdef PICOS
+// Amendment B (2026-07-22, cdogs Stage 2C pic-formats plan, filed after Task
+// 4 shipped): Task 4 made every chars/ pic LA8 (one luma byte), which grays
+// out chromatic pixels the colour-key classifier can't recognise as any of
+// skin/arms/body/legs/feet/head-part -- gun accent colours, hat decorations,
+// almost the entire chars/explosion fire palette (measured: 32,694 / 1.895M
+// chars/ pixels, ~30 files). That's a real, visible regression on real
+// hardware (the sim's own colour handling was already known-unreliable --
+// see project_sim_lied_about_colour), not just a rounding quirk.
+//
+// Fix: decide format per pic (a spritesheet's frames are each their own
+// PicLoad call, so a sheet's frames CAN land on different formats -- every
+// consumer already reads through the format-aware accessors per-Pic, so this
+// is not a problem), from a pre-pass over the exact ARGB8888 surface pixels,
+// before any lossy PicPxSet conversion runs:
+//   - no chromatic-COUNT pixels (CharPixelClass CHROMATIC)   -> LA8
+//     (measured 109/136 chars/ files; the Task-4 memory win stands for these)
+//   - chroma present, but no recognised colour key and no partial-alpha
+//     pixel                                                  -> RGB565
+//     (measured 6/136: every pixel keeps its real colour, recolouring
+//     multiplies by white -- see PicManagerGetCharSprites, pic_manager.c)
+//   - chroma + a recognised colour key, or chroma + partial alpha -> ARGB8888
+//     (measured 21/136, mostly chars/guns/* and chars/hats/capotain*: the
+//     load-time key -> grey+channel-alpha conversion below still runs
+//     exactly as it did pre-Task-4, chromatic pixels just keep real RGB
+//     instead of being folded to a single luma channel)
+static PicFormat PicLoadClassifyCharsFormat(
+	const SDL_Surface *image, const struct vec2i size,
+	const struct vec2i offset, const CharColorType headPartColor)
+{
+	bool hasChromaCount = false;
+	bool hasChannelKey = false;
+	bool hasPartialAlpha = false;
+	int srcI = offset.y * image->w + offset.x;
+	for (int i = 0; i < size.x * size.y; i++, srcI++)
+	{
+		const Uint32 pixel = ((const Uint32 *)image->pixels)[srcI];
+		color_t c;
+		SDL_GetRGBA(pixel, image->format, &c.r, &c.g, &c.b, &c.a);
+		if (c.a != 0 && c.a != 255)
+		{
+			hasPartialAlpha = true;
+		}
+		else if (c.a == 255)
+		{
+			switch (CharColorClassifyPixel(c, headPartColor))
+			{
+			case CHAR_PIXEL_CLASS_CHANNEL_KEY:
+				hasChannelKey = true;
+				break;
+			case CHAR_PIXEL_CLASS_CHROMATIC:
+				hasChromaCount = true;
+				break;
+			case CHAR_PIXEL_CLASS_GREY:
+			default:
+				break;
+			}
+		}
+		if ((i + 1) % size.x == 0)
+		{
+			srcI += image->w - size.x;
+		}
+		if (hasChromaCount && (hasChannelKey || hasPartialAlpha))
+		{
+			// Already forced to ARGB8888; no further pixel can change that.
+			break;
+		}
+	}
+	if (!hasChromaCount)
+	{
+		return PIC_FMT_LA8;
+	}
+	if (!hasChannelKey && !hasPartialAlpha)
+	{
+		return PIC_FMT_RGB565;
+	}
+	return PIC_FMT_ARGB8888;
+}
+#endif
+
 void PicLoad(
 	Pic *p, const struct vec2i size, const struct vec2i offset, const SDL_Surface *image, const bool isHD,
 	const PicFormat fmt, const bool buildChannelMap, const int charHeadPart)
@@ -243,10 +323,34 @@ void PicLoad(
 	}
 	p->offset = svec2i_zero();
 #ifdef PICOS
-	p->fmt = (uint8_t)fmt;
+	// chars/ pics (charHeadPart >= 0): PicManagerAdd no longer gets to pick
+	// the format -- see PicLoadClassifyCharsFormat above (Amendment B). Every
+	// other pic (font.c, style pics, "final" pics) keeps the caller's fmt
+	// verbatim, same as before Task 4.
+	PicFormat resolvedFmt = fmt;
+	if (charHeadPart >= 0)
+	{
+		resolvedFmt =
+			PicLoadClassifyCharsFormat(image, size, offset, (CharColorType)charHeadPart);
+		switch (resolvedFmt)
+		{
+		case PIC_FMT_LA8:
+			g_picos_chars_fmt_la8++;
+			break;
+		case PIC_FMT_RGB565:
+			g_picos_chars_fmt_rgb565++;
+			break;
+		case PIC_FMT_ARGB8888:
+		default:
+			g_picos_chars_fmt_argb8888++;
+			break;
+		}
+	}
+	p->fmt = (uint8_t)resolvedFmt;
 #else
 	// Desktop has no software RGB565/LA8 rendering path -- every pic stays
-	// ARGB8888 regardless of what the caller asked for.
+	// ARGB8888 regardless of what the caller (or the chars/ classifier)
+	// asked for.
 	p->fmt = PIC_FMT_ARGB8888;
 #endif
 	CMALLOC(p->Data, (size_t)size.x * size.y * PicPxBytes(p));
@@ -339,12 +443,16 @@ void PicLoad(
 			{
 				// Partial alpha: the pre-Task-4 code's `c.a != 255 ->
 				// continue` guard left such pixels completely untouched
-				// (full rgb, original alpha). LA8 has only one luma channel
-				// (PicPxSet folds r/g/b down to MAX(r,g,b)), so any partial-
-				// alpha pixel that also has real chroma loses it here --
-				// there is no way to encode 3 independent channels in LA8.
-				// Verified via a full-asset scan of data/graphics/chars
-				// (Task 4 report): 0 of 1,895,008 chars/ pixels have partial
+				// (full rgb, original alpha); PicPxSet(p, i, c) reproduces that.
+				// A partial-alpha pixel with real chroma would only lose it if
+				// p->fmt == PIC_FMT_LA8 (PicPxSet folds r/g/b down to
+				// MAX(r,g,b) there) -- but PicLoadClassifyCharsFormat's pre-pass
+				// (above) counts any partial-alpha pixel and, together with a
+				// chromatic-COUNT pixel anywhere else in the same pic, resolves
+				// the whole pic to PIC_FMT_ARGB8888 instead (Amendment B), so
+				// this can never run against fmt LA8 for a pic where it would
+				// actually lose anything. Verified via a full-asset scan of
+				// data/graphics/chars: 0 of 1,895,008 chars/ pixels have partial
 				// alpha in this asset set, so in practice this branch is
 				// currently unreached; kept correct in case future art adds
 				// some.
@@ -362,23 +470,24 @@ void PicLoad(
 					converted.r = converted.g = converted.b = value;
 					converted.a = CharColorTypeAlpha(colorType);
 				}
-				// NOTE (chroma loss): when p->fmt == PIC_FMT_LA8, PicPxSet
-				// folds converted.{r,g,b} down to MAX() regardless of
-				// whether this branch changed them. That is lossless for
-				// colorType != CHAR_COLOR_COUNT (already grey by
-				// construction) and for COUNT pixels that are near-grey to
-				// begin with (CharColorTypeFromColor's own near-grey check).
-				// It is LOSSY for COUNT pixels reached via that function's
-				// final fallthrough -- i.e. genuinely chromatic pixels that
-				// don't match any recognised colour-key axis. Those are real
-				// in this asset set (measured ~1.73% of all chars/ pixels,
-				// 32,694 / 1,895,008, concentrated in chars/guns/ weapon-
-				// variant accent colours, several chars/hats/ decorations,
-				// and nearly all of chars/explosion's fire palette) and
-				// PicPx/PicPxSet cannot represent them losslessly in a
-				// single luma channel. See the Task 4 report for the full
-				// file list and severity assessment -- this is a reported,
-				// not silently accepted, limitation.
+				// Amendment B: when p->fmt == PIC_FMT_LA8, PicPxSet folds
+				// converted.{r,g,b} down to MAX() regardless of whether this
+				// branch changed them. That is lossless for colorType !=
+				// CHAR_COLOR_COUNT (already grey by construction) and for COUNT
+				// pixels that are near-grey (CharColorTypeFromColor's own
+				// near-grey check). It would be LOSSY for a COUNT pixel reached
+				// via that function's final fallthrough -- a genuinely
+				// chromatic pixel matching no colour-key axis -- but
+				// PicLoadClassifyCharsFormat's pre-pass (above) already scanned
+				// every pixel in this same Pic for exactly that case
+				// (CHAR_PIXEL_CLASS_CHROMATIC) and would have resolved fmt to
+				// RGB565 or ARGB8888 instead of LA8 had it found one. So by the
+				// time this line runs with p->fmt == PIC_FMT_LA8, every COUNT
+				// pixel in this Pic is provably near-grey and the MAX() fold
+				// loses nothing; genuinely chromatic pixels live in an
+				// RGB565/ARGB8888 Pic where PicPxSet keeps their real r/g/b (see
+				// the Task 4 report + its Amendment B fix-up for the measured
+				// per-file breakdown: 109 LA8 / 6 RGB565 / 21 ARGB8888).
 				PicPxSet(p, i, converted);
 			}
 		}

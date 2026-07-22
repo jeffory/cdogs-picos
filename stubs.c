@@ -88,6 +88,17 @@ size_t g_picos_pic_tex_bytes  = 0;
 size_t g_picos_pic_bytes_peak = 0;
 int    g_picos_pic_count      = 0;
 int    g_picos_img_skip_count = 0;
+int    g_picos_chars_fmt_la8      = 0;
+int    g_picos_chars_fmt_rgb565   = 0;
+int    g_picos_chars_fmt_argb8888 = 0;
+
+void picos_charsfmt_report(const char *tag) {
+    fprintf(stderr, "CHARSFMT %s la8=%d rgb565=%d argb8888=%d\n",
+            tag,
+            g_picos_chars_fmt_la8,
+            g_picos_chars_fmt_rgb565,
+            g_picos_chars_fmt_argb8888);
+}
 
 void picos_gfx_report(const char *tag) {
     const size_t total = g_picos_pic_data_bytes + g_picos_pic_tex_bytes;
