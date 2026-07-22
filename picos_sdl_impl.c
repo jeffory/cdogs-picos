@@ -6,6 +6,7 @@
 #include "picos_sdl_impl.h"
 #include "os.h"
 #include "picos_heap.h"
+#include "picos_charcolors.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -479,6 +480,25 @@ int SDL_QueryTexture(SDL_Texture *t, Uint32 *format, int *access,
    RENDER OPERATIONS — software blitting
    ================================================================ */
 
+/* ── Per-blit CharColors LUT (Stage 2D, Task 1) ──────────────────
+   Dormant until a caller (Task 2) calls PicosBlitSetCharColors.  Built by
+   calling the real CharColorsGetChannelMask once per index so the
+   channel-index -> CharColors-field mapping stays single-source (blit.c);
+   never re-derived or duplicated here. */
+static color_t s_char_lut[256];
+static bool s_char_colors_active = false;
+
+void PicosBlitSetCharColors(const CharColors *colors) {
+    if (!colors) {
+        s_char_colors_active = false;
+        return;
+    }
+    for (int i = 0; i < 256; i++) {
+        s_char_lut[i] = CharColorsGetChannelMask(colors, (uint8_t)i);
+    }
+    s_char_colors_active = true;
+}
+
 int SDL_RenderCopy(SDL_Renderer *r, SDL_Texture *t, const SDL_Rect *srcrect,
                    const SDL_Rect *dstrect) {
     return SDL_RenderCopyEx(r, t, srcrect, dstrect, 0, NULL, SDL_FLIP_NONE);
@@ -571,14 +591,29 @@ int SDL_RenderCopyEx(SDL_Renderer *r, SDL_Texture *t, const SDL_Rect *srcrect,
                    index" (246-254, see blit.c's CharColorTypeAlpha) that
                    this renderer treats as plain alpha too -- byte-identical
                    to what the old ARGB8888 branch produced for the same
-                   grey-word-with-channel-alpha chars pixel. */
+                   grey-word-with-channel-alpha chars pixel.
+                   When a CharColors LUT is active (Stage 2D, Task 1;
+                   dormant until Task 2 wires a caller), channel-index
+                   alphas instead recolour L through the LUT and collapse
+                   to a binary opaque/transparent alpha, matching the
+                   baked-sprite semantics exactly. */
                 const uint16_t s = src_row16[src_x];
                 const uint32_t a = (s >> 8) & 0xFF;
                 const uint32_t l = s & 0xFF;
-                if (a == 0) {
+                if (!s_char_colors_active) {
+                    if (a == 0) {
+                        pa = 0; pr_ = 0; pg = 0; pb = 0;
+                    } else {
+                        pa = a; pr_ = pg = pb = l;
+                    }
+                } else if (a < 128) {
                     pa = 0; pr_ = 0; pg = 0; pb = 0;
                 } else {
-                    pa = a; pr_ = pg = pb = l;
+                    const color_t m = s_char_lut[a];
+                    pr_ = (l * m.r) / 255;
+                    pg  = (l * m.g) / 255;
+                    pb  = (l * m.b) / 255;
+                    pa = 255;
                 }
             } else {
                 const uint32_t px = src_row32[src_x];
@@ -586,6 +621,17 @@ int SDL_RenderCopyEx(SDL_Renderer *r, SDL_Texture *t, const SDL_Rect *srcrect,
                 pr_ = (px >> 16) & 0xFF;
                 pg  = (px >> 8) & 0xFF;
                 pb  = px & 0xFF;
+                if (s_char_colors_active) {
+                    /* Same LUT, applied post-decode (Stage 2D, Task 1;
+                       dormant until Task 2 wires a caller): recolour by the
+                       original alpha's channel, then collapse alpha to the
+                       same binary opaque/transparent split as the LA8 path. */
+                    const color_t m = s_char_lut[pa];
+                    pr_ = (pr_ * m.r) / 255;
+                    pg  = (pg * m.g) / 255;
+                    pb  = (pb * m.b) / 255;
+                    pa = (pa < 128) ? 0 : 255;
+                }
             }
 
             /* Apply color modulation */

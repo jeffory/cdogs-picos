@@ -22,7 +22,14 @@ struct PicoCalcAPI;
    (a few with real colour but no recognised colour key), or ARGB8888 (a
    few with both real colour AND a colour key, or partial alpha -- gun/hat
    sheets, mostly). Textures the shim OWNS (the window-sized render
-   targets) are always RGB565. */
+   targets) are always RGB565.
+
+   Stage 2D (Task 1): the LA8 and ARGB8888 branches of SDL_RenderCopyEx can
+   additionally recolour channel-index alpha values (246-255) through a
+   256-entry CharColors LUT set via PicosBlitSetCharColors (declared in
+   picos_charcolors.h -- kept out of this header and out of picos_sdl.h to
+   avoid an include cycle through blit.h; see that header's comment).
+   Dormant -- byte-identical to pre-2D output -- until a caller sets one. */
 #define PICOS_TEXFMT_ARGB8888  0   /* 4 bytes/px, borrowed Pic->Data  */
 #define PICOS_TEXFMT_RGB565    1   /* 2 bytes/px, shim-owned OR borrowed */
 #define PICOS_TEXFMT_LA8       2   /* 2 bytes/px, borrowed Pic->Data (chars/):
