@@ -53,6 +53,23 @@
 #include "gamedata.h"
 #include "grafx_bg.h"
 
+// Stage 2D Task 2: PICOS recolours char sprites at blit time instead of
+// baking a per-CharColors copy of the sprite sheet (Task 1 built the LUT
+// mechanism in picos_sdl_impl.c; this wires callers to it). Any code that
+// blits a Pic obtained from GetHeadPic/GetHeadPartPic/GetBodyPic/GetLegsPic/
+// GetGunPic (or an ActorPics built from them) on PICOS must bracket that
+// blit between a set and a NULL clear -- see picos_charcolors.h for the full
+// contract. Declared here (rather than separately in every .c that draws
+// actor/head pics) since draw_actor.h is already the common include for all
+// of them. Desktop keeps baking colours into the cache at
+// PicManagerGetCharSprites time, so there is nothing to bracket there --
+// the macro compiles away to nothing.
+#ifdef PICOS
+#include "picos_charcolors.h"
+#else
+#define PicosBlitSetCharColors(colors) ((void)0)
+#endif
+
 typedef struct
 {
 	const Pic *Head;
@@ -73,6 +90,12 @@ typedef struct
 	color_t ShadowMask;
 	color_t Mask;
 	const CharSprites *Sprites;
+	// Stage 2D Task 2: effective CharColors used to build this frame's pics
+	// (the same pointer GetUnorderedPics passed to the five sprite
+	// getters), applied at blit time via PicosBlitSetCharColors. Left
+	// memset-zero for the IsDead early return in GetUnorderedPics -- that
+	// path is never blitted through a bracket (see DrawActorPics).
+	CharColors Colors;
 } ActorPics;
 
 void DrawCharacterSimple(

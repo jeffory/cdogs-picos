@@ -370,6 +370,12 @@ static ActorPics GetUnorderedPics(
 	{
 		colors = &c->Colors;
 	}
+	// Stage 2D Task 2: record the effective colours used for every getter
+	// call below, so DrawActorPics can bracket its OrderedPics blits with
+	// them on PICOS. Only reached on the non-dead path -- the IsDead early
+	// return above leaves pics.Colors memset-zero and is never blitted
+	// through a bracket (DrawDyingBody runs outside the loop that uses it).
+	pics.Colors = *colors;
 
 	// Head
 	direction_e headDir = dir;
@@ -548,6 +554,13 @@ void DrawActorPics(
 	{
 		if (pics->IsDying)
 		{
+			// Stage 2D Task 2: death sprites (CharacterClassGetDeathSprites)
+			// are loaded via plain PicManagerGetSprites and were never
+			// recoloured on desktop either -- no CharColors bracket here,
+			// deliberately. pics->Colors is memset-zero for this early
+			// return (see GetUnorderedPics) and must never reach
+			// PicosBlitSetCharColors; DrawDyingBody blits pics->Body
+			// directly, entirely outside the bracketed loop below.
 			DrawDyingBody(&gGraphicsDevice, pics, pos, bounds);
 		}
 	}
@@ -555,6 +568,9 @@ void DrawActorPics(
 	{
 		// TODO: use bounds
 		DrawShadow(&gGraphicsDevice, pos, svec2(8, 6), pics->ShadowMask);
+		// Stage 2D Task 2: recolour these blits at draw time -- the five
+		// sprite getters return base (unrecoloured) sprites on PICOS now.
+		PicosBlitSetCharColors(&pics->Colors);
 		for (int i = 0; i < BODY_PART_COUNT; i++)
 		{
 			const Pic *pic = pics->OrderedPics[i];
@@ -574,6 +590,7 @@ void DrawActorPics(
 				pic, gGraphicsDevice.gameWindow.renderer, drawPos, pics->Mask,
 				0, svec2_one(), SDL_FLIP_NONE, drawSrc);
 		}
+		PicosBlitSetCharColors(NULL);
 	}
 }
 static void DrawLaserSightSingle(
@@ -648,8 +665,16 @@ const Pic *GetHeadPic(
 	const int row = isGrimacing ? 1 : 0;
 	const int idx = (int)dir + row * 8;
 	// Get or generate masked sprites
+#ifdef PICOS
+	// Stage 2D Task 2: recolour at blit time instead of baking a
+	// per-CharColors copy -- return the base (unrecoloured) sprite; callers
+	// bracket their PicRender calls with PicosBlitSetCharColors(colors).
+	const NamedSprites *ns =
+		PicManagerGetSprites(&gPicManager, c->HeadSprites);
+#else
 	const NamedSprites *ns =
 		PicManagerGetCharSprites(&gPicManager, c->HeadSprites, colors);
+#endif
 	return CArrayGet(&ns->pics, idx);
 }
 const Pic *GetHeadPartPic(
@@ -666,8 +691,13 @@ const Pic *GetHeadPartPic(
 	char buf[CDOGS_PATH_MAX];
 	const char *subpaths[] = {"hairs", "facehairs", "hats", "glasses"};
 	sprintf(buf, "chars/%s/%s", subpaths[hp], name);
+#ifdef PICOS
+	// Stage 2D Task 2: see GetHeadPic.
+	const NamedSprites *ns = PicManagerGetSprites(&gPicManager, buf);
+#else
 	const NamedSprites *ns =
 		PicManagerGetCharSprites(&gPicManager, buf, colors);
+#endif
 	if (ns == NULL)
 	{
 		return NULL;
@@ -710,7 +740,12 @@ static const Pic *GetBodyPic(
 			anim == ACTORANIMATION_WALKING ? "run" : "idle",
 			upperPose); // TODO: other gun holding poses
 		// Get or generate masked sprites
+#ifdef PICOS
+		// Stage 2D Task 2: see GetHeadPic.
+		ns = PicManagerGetSprites(pm, buf);
+#else
 		ns = PicManagerGetCharSprites(pm, buf, colors);
+#endif
 		// TODO: provide dualgun sprites for all body types
 		if (ns == NULL && strcmp(upperPose, "_handgun") != 0)
 		{
@@ -734,7 +769,12 @@ static const Pic *GetLegsPic(
 		buf, "chars/bodies/%s/legs_%s", cs->Name,
 		anim == ACTORANIMATION_WALKING ? "run" : "idle");
 	// Get or generate masked sprites
+#ifdef PICOS
+	// Stage 2D Task 2: see GetHeadPic.
+	const NamedSprites *ns = PicManagerGetSprites(pm, buf);
+#else
 	const NamedSprites *ns = PicManagerGetCharSprites(pm, buf, colors);
+#endif
 	return CArrayGet(&ns->pics, idx);
 }
 static const Pic *GetGunPic(
@@ -743,7 +783,12 @@ static const Pic *GetGunPic(
 {
 	const int idx = (gunState == GUNSTATE_READY ? 8 : 0) + dir;
 	// Get or generate masked sprites
+#ifdef PICOS
+	// Stage 2D Task 2: see GetHeadPic.
+	const NamedSprites *ns = PicManagerGetSprites(pm, gunSprites);
+#else
 	const NamedSprites *ns = PicManagerGetCharSprites(pm, gunSprites, colors);
+#endif
 	if (ns == NULL)
 	{
 		return NULL;
@@ -782,6 +827,11 @@ void DrawHead(
 		DIRECTION_DOWN, GUNSTATE_READY);
 	const color_t mask = colorWhite;
 	const struct vec2i charOffset = svec2i(0, 12);
+	// Stage 2D Task 2: bracket both blits below with this Character's
+	// colours -- GetHeadPic/GetHeadPartPic return base sprites on PICOS now.
+	// No early return in this function, so this single set/clear pair
+	// always balances.
+	PicosBlitSetCharColors(&c->Colors);
 	PicRender(
 		head, renderer, svec2i_add(svec2i_add(pos, headOffset), charOffset),
 		mask, 0, svec2_one(), SDL_FLIP_NONE, Rect2iZero());
@@ -804,6 +854,7 @@ void DrawHead(
 			}
 		}
 	}
+	PicosBlitSetCharColors(NULL);
 }
 #define DYING_BODY_OFFSET 3
 static void DrawDyingBody(

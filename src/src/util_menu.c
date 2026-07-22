@@ -222,6 +222,11 @@ static void DrawUtilMenuItem(
 	int price = 0;
 	const char *name = NULL;
 	const Pic *pic = NULL;
+	// Stage 2D Task 2: only OPTION_LIVES's pic comes from GetHeadPic (a
+	// channel-indexed char sprite that needs recolouring at blit time on
+	// PICOS); the health icon is a plain pic and must render unrecoloured.
+	// NULL here means "no bracket" -- see the shared PicRender below.
+	const CharColors *picColors = NULL;
 	switch (option)
 	{
 	case OPTION_HP:
@@ -240,6 +245,7 @@ static void DrawUtilMenuItem(
 		name = "Life";
 		pic = GetHeadPic(
 			pData->Char.Class, DIRECTION_DOWN, false, &pData->Char.Colors);
+		picColors = &pData->Char.Colors;
 		break;
 	default:
 		name = "Back";
@@ -358,9 +364,13 @@ static void DrawUtilMenuItem(
 		const struct vec2i picPos = svec2i_subtract(
 			svec2i(x, bgPos.y + bgSize.y / 2),
 			svec2i_scale_divide(pic->size, 2));
+		// Stage 2D Task 2: picColors is NULL except for OPTION_LIVES, so
+		// this is a no-op bracket for the plain health icon.
+		PicosBlitSetCharColors(picColors);
 		PicRender(
 			pic, g->gameWindow.renderer, picPos, colorWhite, 0, svec2_one(),
 			SDL_FLIP_NONE, Rect2iZero());
+		PicosBlitSetCharColors(NULL);
 	}
 }
 static int HandleInputMenu(int cmd, void *data)
