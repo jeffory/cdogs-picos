@@ -722,11 +722,10 @@ SDL_Surface *LoadImgToSurface(const char *path)
 	   recycled blocks and so skipped images while real memory was free.
 	   The reserve is now an actual floor, and it must cover everything
 	   that allocates OUTSIDE this guard: each admitted image spawns
-	   Pic->Data (w*h*4 for chars/style pics still ARGB8888 until Tasks
-	   3-4, w*h*2 for "final" pics converted to RGB565 in Task 2) plus an
-	   RGB565 texture in PicManagerAdd; then sounds, campaign scans, menus
-	   — and mission load, whose per-CharColors sprite cloning is uncapped
-	   until 2D.
+	   Pic->Data (w*h*2 for every pic as of Stage 2C Tasks 2-4: RGB565 for
+	   "final" and style pics, LA8 for chars/ pics) plus an RGB565 texture
+	   in PicManagerAdd; then sounds, campaign scans, menus — and mission
+	   load, whose per-CharColors sprite cloning is uncapped until 2D.
 	   History: at a 1MB (watermark) reserve the heap ended 99.9% full and
 	   the app died in late init. Retune only against a measured mission
 	   start on hardware, not the simulator (sim heap behaviour differs). */

@@ -15,11 +15,15 @@ struct PicoCalcAPI;
    The shim renders in RGB565 (host byte order — display->drawImageNN
    byte-swaps to the panel's big-endian order itself).  Textures that
    BORROW Pic->Data mirror whatever format that Pic settled on --
-   PICOS_TEXFMT_ARGB8888 for chars/style pics (still ARGB8888 until Tasks
-   3-4) or PICOS_TEXFMT_RGB565 for "final" pics (Task 2 onward); textures
-   the shim OWNS (the window-sized render targets) are always RGB565. */
+   PICOS_TEXFMT_ARGB8888 for style pics before Task 3 (none remain after
+   Stage 2C), PICOS_TEXFMT_RGB565 for "final" pics (Task 2) and style pics
+   (Task 3), or PICOS_TEXFMT_LA8 for chars/ pics (Task 4); textures the shim
+   OWNS (the window-sized render targets) are always RGB565. */
 #define PICOS_TEXFMT_ARGB8888  0   /* 4 bytes/px, borrowed Pic->Data  */
 #define PICOS_TEXFMT_RGB565    1   /* 2 bytes/px, shim-owned OR borrowed */
+#define PICOS_TEXFMT_LA8       2   /* 2 bytes/px, borrowed Pic->Data (chars/):
+                                      low byte L, high byte A (0 = transparent,
+                                      else a channel index or 255 = literal) */
 
 /* RGB565 has no alpha channel.  This sentinel (pure magenta: r=31,
    g=0, b=31) marks a transparent pixel.  It decodes to exactly the

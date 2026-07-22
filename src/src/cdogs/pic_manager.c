@@ -62,18 +62,22 @@ void PicManagerInit(PicManager *pm)
 static NamedPic *AddNamedPic(map_t pics, const char *name, const Pic *p);
 static NamedSprites *AddNamedSprites(map_t sprites, const char *name);
 static void AfterAdd(PicManager *pm);
-// Stage 2C-3: chars/ (+ head-part sub-prefixes) stays ARGB8888 -- its pixels
-// are read/recolored as exact 8-bit channels at load time right below
-// (PicManagerAdd's char conversion) and again per-frame
-// (PicManagerGetCharSprites), so it needs full precision (Task 4's job to
-// convert). The style-maskable prefixes (wall/tile/door/exits/keys) move to
-// RGB565 + a load-time packed channel map (PicLoad's buildChannelMap):
-// PicManagerGenerateMaskedPic classifies each pixel once, on the exact
-// ARGB8888 surface, and stores the result in Pic::Channels instead of
-// re-deriving it from quantized RGB565 pixels at mask time. Everything else
-// -- menus, UI, HUD, particles, the editor, the "palette" LUT, etc. -- is
-// "final" and halves to RGB565 with no channel map (see the pic-data
-// survey).
+// Stage 2C-4: chars/ (+ head-part sub-prefixes) loads as LA8 -- one luma
+// byte plus an alpha byte that doubles as either real transparency (0) or a
+// "channel index" (246-254, see blit.c's CharColorTypeAlpha /
+// CharColorsGetChannelMask) once PicLoad's load-time colour-key
+// classification has run (moved there from a separate post-load pass that
+// used to live right here in PicManagerAdd -- see the head-part detection
+// below and PicLoad's chars/ branch in pic.c). Recoloured (per-CharColors)
+// output copies are PIC_FMT_RGB565 instead (PicManagerGetCharSprites) since
+// they hold real colours, not channel indices. The style-maskable prefixes
+// (wall/tile/door/exits/keys) move to RGB565 + a load-time packed channel
+// map (PicLoad's buildChannelMap): PicManagerGenerateMaskedPic classifies
+// each pixel once, on the exact ARGB8888 surface, and stores the result in
+// Pic::Channels instead of re-deriving it from quantized RGB565 pixels at
+// mask time. Everything else -- menus, UI, HUD, particles, the editor, the
+// "palette" LUT, etc. -- is "final" and halves to RGB565 with no channel
+// map (see the pic-data survey).
 typedef struct
 {
 	PicFormat fmt;
@@ -86,7 +90,7 @@ static PicFmtClass PicManagerClassifyFmt(const char *buf)
 	};
 	if (strncmp(buf, "chars/", strlen("chars/")) == 0)
 	{
-		return (PicFmtClass){PIC_FMT_ARGB8888, false};
+		return (PicFmtClass){PIC_FMT_LA8, false};
 	}
 	for (size_t i = 0; i < sizeof stylePrefixes / sizeof stylePrefixes[0]; i++)
 	{
@@ -134,6 +138,31 @@ static void PicManagerAdd(
 		}
 	}
 	const PicFmtClass picClass = PicManagerClassifyFmt(buf);
+	// Head-part hint for PicLoad's chars/ colour-key classification (moved
+	// there from a separate post-load pass -- see PicManagerClassifyFmt's
+	// comment above and PicLoad's chars/ branch in pic.c). All head parts
+	// default to hair colour except the facehairs/hats/glasses sub-prefixes,
+	// which get their own channel; -1 means "not a chars/ pic", which tells
+	// PicLoad to skip classification entirely.
+	const bool isChars = strncmp("chars/", buf, strlen("chars/")) == 0;
+	CharColorType headPartColor = CHAR_COLOR_HAIR;
+	if (isChars)
+	{
+		const char *subfolder = buf + strlen("chars/");
+		if (strncmp("facehairs/", subfolder, strlen("facehairs/")) == 0)
+		{
+			headPartColor = CHAR_COLOR_FACEHAIR;
+		}
+		else if (strncmp("hats/", subfolder, strlen("hats/")) == 0)
+		{
+			headPartColor = CHAR_COLOR_HAT;
+		}
+		else if (strncmp("glasses/", subfolder, strlen("glasses/")) == 0)
+		{
+			headPartColor = CHAR_COLOR_GLASSES;
+		}
+	}
+	const int charHeadPart = isChars ? (int)headPartColor : -1;
 	NamedSprites *nsp = NULL;
 	NamedPic *np = NULL;
 	if (isSpritesheet)
@@ -167,53 +196,7 @@ static void PicManagerAdd(
 			}
 			PicLoad(
 				pic, size, offset, image, isHD, picClass.fmt,
-				picClass.styleChannelMap);
-			if (pic->Data == NULL) continue;
-
-			if (strncmp("chars/", buf, strlen("chars/")) == 0)
-			{
-				// All head parts use hair color, so determine
-				// which head part we are looking at
-				const char *subfolder = buf + strlen("chars/");
-				CharColorType headPartColor = CHAR_COLOR_HAIR;
-				if (strncmp("facehairs/", subfolder, strlen("facehairs/")) ==
-					0)
-				{
-					headPartColor = CHAR_COLOR_FACEHAIR;
-				}
-				else if (strncmp("hats/", subfolder, strlen("hats/")) == 0)
-				{
-					headPartColor = CHAR_COLOR_HAT;
-				}
-				else if (
-					strncmp("glasses/", subfolder, strlen("glasses/")) == 0)
-				{
-					headPartColor = CHAR_COLOR_GLASSES;
-				}
-				// Convert char pics to multichannel version
-				for (int i = 0; i < pic->size.x * pic->size.y; i++)
-				{
-					color_t c = PicPx(pic, i);
-					// Don't bother if the alpha has already been modified; it
-					// means we have already processed this pixel
-					if (c.a != 255)
-					{
-						continue;
-					}
-					// Convert character color keyed color to
-					// greyscale + special alpha
-					const CharColorType colorType =
-						CharColorTypeFromColor(c, headPartColor);
-					color_t converted = c;
-					if (colorType != CHAR_COLOR_COUNT)
-					{
-						const uint8_t value = MAX(MAX(c.r, c.g), c.b);
-						converted.r = converted.g = converted.b = value;
-						converted.a = CharColorTypeAlpha(colorType);
-					}
-					PicPxSet(pic, i, converted);
-				}
-			}
+				picClass.styleChannelMap, charHeadPart);
 		}
 	}
 	SDL_UnlockSurface(image);
@@ -680,6 +663,27 @@ static void PicManagerGenerateMaskedPic(
 	Pic *original = PicManagerGetPic(pm, name);
 	if (original == NULL) return;
 
+#ifdef PICOS
+	// Style pics (wall/tile/door/exits/keys) load as RGB565 with a packed
+	// Channels map (Task 3); the masking loop below reads that map via
+	// PicChannelGet, which only makes sense on an RGB565 original. CASSERT
+	// compiles out on-device, so back it with an explicit bail -- getting
+	// here with e.g. an LA8 chars/ pic (there shouldn't be a name collision,
+	// but formats drifting out of sync with PicManagerClassifyFmt is exactly
+	// the kind of bug this guards against) would otherwise read Data through
+	// the wrong accessor branch.
+	CASSERT(
+		original->fmt == PIC_FMT_RGB565,
+		"GenerateMaskedPic on non-RGB565 original");
+	if (original->fmt != PIC_FMT_RGB565)
+	{
+		LOG(LM_MAIN, LL_ERROR,
+			"cannot mask pic '%s': unexpected format %d (want RGB565)", name,
+			original->fmt);
+		return;
+	}
+#endif
+
 	// Create the new pic by masking the original pic. Classification comes
 	// from the load-time channel map (Pic::Channels, set in PicLoad from
 	// the exact ARGB8888 surface) rather than re-testing quantized RGB565
@@ -772,9 +776,32 @@ const NamedSprites *PicManagerGetCharSprites(
 	{
 		return NULL;
 	}
+#ifdef PICOS
+	// Every chars/ pic loads as LA8 (PicManagerClassifyFmt); reading one
+	// through the wrong PicPx/PicPxSet branch below would misinterpret its
+	// bytes rather than just look wrong, so bail before touching any pixel
+	// data or populating the cache if that invariant has drifted. CASSERT
+	// compiles out on-device -- this is the explicit fallback for that.
+	// Checked up front (not per-pic inside the conversion loop below) so a
+	// violation can never leave a partially-recoloured, permanently-cached
+	// NamedSprites behind under `buf`.
+	CA_FOREACH(Pic, opCheck, ons->pics)
+	CASSERT(opCheck->fmt == PIC_FMT_LA8, "GetCharSprites source not LA8");
+	if (opCheck->fmt != PIC_FMT_LA8)
+	{
+		LOG(LM_MAIN, LL_ERROR,
+			"cannot recolor sprites '%s': pic %d has unexpected format %d "
+			"(want LA8)",
+			name, _ca_index, opCheck->fmt);
+		return NULL;
+	}
+	CA_FOREACH_END()
+#endif
 	NamedSprites *nsp = AddNamedSprites(pm->customSprites, buf);
 	CA_FOREACH(Pic, op, ons->pics)
-	Pic p = PicCopy(op);
+	// Recoloured output holds real colours (mask-multiplied), not channel
+	// indices -- RGB565 is its correct home (see PicCopyToFormat, pic.c).
+	Pic p = PicCopyToFormat(op, PIC_FMT_RGB565);
 	p.Tex = NULL;
 	for (int i = 0; i < p.size.x * p.size.y; i++)
 	{

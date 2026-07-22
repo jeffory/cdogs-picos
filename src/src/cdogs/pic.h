@@ -94,12 +94,34 @@ void PicPxSet(Pic *p, int i, color_t c);                   // format-aware write
 bool PicPxTransparent(const Pic *p, int i);                // whole-word 0 / CKEY / A==0
 void PicPxCopy(Pic *dst, int di, const Pic *src, int si);  // raw same-format copy
 
+// `charHeadPart` is a `CharColorType` value (see blit.h) or -1.  Pass -1 for
+// every non-chars/ pic (font.c, style pics, "final" pics): PicLoad skips the
+// colour-key classification entirely and stores the source pixel verbatim.
+// For chars/ pics (pic_manager.c's PicManagerAdd), pass the head-part base
+// colour (HAIR, or the FACEHAIR/HAT/GLASSES override for those sub-prefixes)
+// so PicLoad can reproduce -- once, at load time -- what used to be a
+// separate post-load pass over the pic: classify each opaque pixel's colour
+// key (CharColorTypeFromColor) and write back grey + a special
+// "channel index" alpha (CharColorTypeAlpha). pic.h stays free of blit.h (it
+// would create an include cycle -- blit.h includes pic.h), hence the plain
+// int rather than the CharColorType type itself.
 void PicLoad(
 	Pic *p, const struct vec2i size, const struct vec2i offset,
 	const SDL_Surface *image, const bool isHD, const PicFormat fmt,
-	const bool buildChannelMap);
+	const bool buildChannelMap, const int charHeadPart);
 bool PicTryMakeTex(Pic *p);
 Pic PicCopy(const Pic *src);
+// Like PicCopy, but the copy is converted to a different pixel format
+// (per-pixel, via PicPx/PicPxSet) rather than a raw memcpy of same-format
+// bytes. Used for cache outputs whose *destination* role calls for a
+// different format than their source -- e.g. PicManagerGetCharSprites'
+// per-CharColors recoloured sprite cache, which reads an LA8 source but
+// stores a real-colour RGB565 final (see pic_manager.c). The output never
+// carries a Channels map (matching PicManagerGenerateMaskedPic's use of
+// PicChannelsFree on its own PicCopy output) since these are cached-by-name
+// finals, never re-masked. Byte accounting is sized by the DESTINATION
+// format, not the source's.
+Pic PicCopyToFormat(const Pic *src, const PicFormat fmt);
 void PicFree(Pic *pic);
 bool PicIsNone(const Pic *pic);
 

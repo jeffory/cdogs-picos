@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "blit.h"
 #include "c_hashmap/hashmap.h"
 #include "defs.h"
 #include "grafx.h"
@@ -230,7 +231,7 @@ void PicChannelsFree(Pic *p)
 
 void PicLoad(
 	Pic *p, const struct vec2i size, const struct vec2i offset, const SDL_Surface *image, const bool isHD,
-	const PicFormat fmt, const bool buildChannelMap)
+	const PicFormat fmt, const bool buildChannelMap, const int charHeadPart)
 {
 	memset(p, 0, sizeof *p);
 	p->size = size;
@@ -318,6 +319,68 @@ void PicLoad(
 		if (c.a == 0)
 		{
 			PicPxSet(p, i, (color_t){0, 0, 0, 0});
+		}
+		else if (charHeadPart >= 0)
+		{
+			// chars/ pic (see PicManagerAdd, pic_manager.c): reproduce, once
+			// and in place, what used to be a separate pass over the loaded
+			// pic. Character colours are embedded in pixels two ways -- see
+			// blit.c's CharColorTypeFromColor/CharColorTypeAlpha comment --
+			// and this is where a source-image colour key becomes the
+			// in-game "grey + special alpha" encoding. This branch is NOT
+			// PICOS-gated: desktop forces p->fmt back to PIC_FMT_ARGB8888
+			// above regardless of what PicManagerAdd requested, so running
+			// the identical classify-then-PicPxSet logic here (rather than
+			// keeping a second copy of the old post-load loop under
+			// `#ifndef PICOS`) reproduces byte-identical desktop output with
+			// no duplicated logic -- PicPxSet's ARGB8888 branch is a plain
+			// COLOR2PIXEL of `converted`, same as the removed block did.
+			if (c.a != 255)
+			{
+				// Partial alpha: the pre-Task-4 code's `c.a != 255 ->
+				// continue` guard left such pixels completely untouched
+				// (full rgb, original alpha). LA8 has only one luma channel
+				// (PicPxSet folds r/g/b down to MAX(r,g,b)), so any partial-
+				// alpha pixel that also has real chroma loses it here --
+				// there is no way to encode 3 independent channels in LA8.
+				// Verified via a full-asset scan of data/graphics/chars
+				// (Task 4 report): 0 of 1,895,008 chars/ pixels have partial
+				// alpha in this asset set, so in practice this branch is
+				// currently unreached; kept correct in case future art adds
+				// some.
+				PicPxSet(p, i, c);
+			}
+			else
+			{
+				const CharColorType colorType =
+					CharColorTypeFromColor(c, (CharColorType)charHeadPart);
+				color_t converted = c;
+				if (colorType != CHAR_COLOR_COUNT)
+				{
+					const uint8_t value =
+						(uint8_t)MAX(MAX(c.r, c.g), c.b);
+					converted.r = converted.g = converted.b = value;
+					converted.a = CharColorTypeAlpha(colorType);
+				}
+				// NOTE (chroma loss): when p->fmt == PIC_FMT_LA8, PicPxSet
+				// folds converted.{r,g,b} down to MAX() regardless of
+				// whether this branch changed them. That is lossless for
+				// colorType != CHAR_COLOR_COUNT (already grey by
+				// construction) and for COUNT pixels that are near-grey to
+				// begin with (CharColorTypeFromColor's own near-grey check).
+				// It is LOSSY for COUNT pixels reached via that function's
+				// final fallthrough -- i.e. genuinely chromatic pixels that
+				// don't match any recognised colour-key axis. Those are real
+				// in this asset set (measured ~1.73% of all chars/ pixels,
+				// 32,694 / 1,895,008, concentrated in chars/guns/ weapon-
+				// variant accent colours, several chars/hats/ decorations,
+				// and nearly all of chars/explosion's fire palette) and
+				// PicPx/PicPxSet cannot represent them losslessly in a
+				// single luma channel. See the Task 4 report for the full
+				// file list and severity assessment -- this is a reported,
+				// not silently accepted, limitation.
+				PicPxSet(p, i, converted);
+			}
 		}
 		else
 		{
@@ -446,6 +509,47 @@ Pic PicCopy(const Pic *src)
 #endif
 	p.Tex = NULL;
 	p.isHD = src->isHD;
+	return p;
+}
+
+// Like PicCopy, but converts to a different pixel format instead of doing a
+// same-format memcpy -- see pic.h for why this exists (chars/ recolour
+// cache: LA8 source, RGB565 output). Every pixel is round-tripped through
+// PicPx (source format) / PicPxSet (dest format) so the conversion always
+// matches what those accessors already guarantee elsewhere; no Channels map
+// is copied (destination is always a cached final, never re-masked).
+Pic PicCopyToFormat(const Pic *src, const PicFormat fmt)
+{
+	Pic p;
+	memset(&p, 0, sizeof p);
+	p.size = src->size;
+	p.offset = src->offset;
+	p.isHD = src->isHD;
+#ifdef PICOS
+	p.fmt = (uint8_t)fmt;
+#else
+	// Desktop has no software RGB565/LA8 rendering path -- mirror PicLoad's
+	// override so this stays consistent with every other pic on desktop.
+	p.fmt = PIC_FMT_ARGB8888;
+#endif
+	const struct vec2i psize = PicPixelSize(src);
+	const size_t destBpp = PicPxBytes(&p);
+	const size_t size = (size_t)psize.x * psize.y * destBpp;
+	CMALLOC(p.Data, size);
+	if (p.Data == NULL)
+	{
+		return p;
+	}
+	for (int i = 0; i < psize.x * psize.y; i++)
+	{
+		PicPxSet(&p, i, PicPx(src, i));
+	}
+#ifdef PICOS
+	g_picos_pic_data_bytes += size;
+	g_picos_pic_count++;
+	picos_gfx_bytes_peak_sample();
+#endif
+	p.Tex = NULL;
 	return p;
 }
 

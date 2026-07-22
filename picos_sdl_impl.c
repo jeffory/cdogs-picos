@@ -48,9 +48,10 @@ static inline uint16_t *get_target(PicosRenderer *r, int *w, int *h) {
         *w = r->render_target->w;
         *h = r->render_target->h;
         /* Render targets always come from SDL_CreateTexture (via
-           TextureCreate), so they are always RGB565.  Borrowed ARGB8888
-           textures are only ever blit sources — fail loudly rather than
-           reinterpret one as 16-bit if that ever changes. */
+           TextureCreate), so they are always RGB565.  Borrowed textures
+           (ARGB8888/LA8, and RGB565 pics too) are only ever blit sources —
+           fail loudly rather than reinterpret one as a render target if
+           that ever changes. */
         if (r->render_target->fmt != PICOS_TEXFMT_RGB565) return NULL;
         return (uint16_t *)r->render_target->pixels;
     }
@@ -308,8 +309,11 @@ SDL_Texture *SDL_CreateTexture(SDL_Renderer *r, Uint32 format, int access,
    pic_fmt mirrors cdogs' PicFormat enum (pic.h) as a plain uint8_t so this
    SDL shim stays independent of game-engine headers:
      0 = PIC_FMT_ARGB8888, 1 = PIC_FMT_RGB565, 2 = PIC_FMT_LA8.
-   Sub-project 2C converts pics away from ARGB8888 one role at a time; Task 2
-   adds the RGB565 mapping ("final" pics); LA8 arrives in Task 4. */
+   Sub-project 2C converted pics away from ARGB8888 one role at a time: Task 2
+   added the RGB565 mapping ("final" pics), Task 3 moved style pics onto it
+   too, and Task 4 adds the LA8 mapping for chars/ pics -- no pic reaches
+   this function as ARGB8888 anymore, but the case stays as a defensive
+   default. */
 SDL_Texture *PicosTextureBorrow(void *pixels, int w, int h, uint8_t pic_fmt) {
     if (!pixels || w <= 0 || h <= 0) return NULL;
     PicosTexture *t = calloc(1, sizeof(PicosTexture));
@@ -319,6 +323,10 @@ SDL_Texture *PicosTextureBorrow(void *pixels, int w, int h, uint8_t pic_fmt) {
     switch (pic_fmt) {
     case 1: /* PIC_FMT_RGB565 */
         t->fmt = PICOS_TEXFMT_RGB565;
+        t->pitch = w * 2;
+        break;
+    case 2: /* PIC_FMT_LA8 */
+        t->fmt = PICOS_TEXFMT_LA8;
         t->pitch = w * 2;
         break;
     case 0: /* PIC_FMT_ARGB8888 */
@@ -504,6 +512,11 @@ int SDL_RenderCopyEx(SDL_Renderer *r, SDL_Texture *t, const SDL_Rect *srcrect,
     bool do_color_mod = (rm != 255 || gm != 255 || bm != 255);
     bool do_blend = (pt->blend_mode == SDL_BLENDMODE_BLEND);
     const bool src565 = (pt->fmt == PICOS_TEXFMT_RGB565);
+    const bool srcLA8 = (pt->fmt == PICOS_TEXFMT_LA8);
+    /* RGB565 and LA8 are both 2 bytes/px, laid out w uint16_t's per row --
+       the row-pointer arithmetic below is identical for either, only the
+       per-pixel decode differs. */
+    const bool src16 = src565 || srcLA8;
 
     /* Blit with scaling */
     for (int j = 0; j < dh; j++) {
@@ -517,11 +530,11 @@ int SDL_RenderCopyEx(SDL_Renderer *r, SDL_Texture *t, const SDL_Rect *srcrect,
 
         uint16_t *dst_row = target + (size_t)ty * tw;
         const uint32_t *src_row32 =
-            src565 ? NULL
-                   : (const uint32_t *)pt->pixels + (size_t)src_y * pt->w;
+            src16 ? NULL
+                  : (const uint32_t *)pt->pixels + (size_t)src_y * pt->w;
         const uint16_t *src_row16 =
-            src565 ? (const uint16_t *)pt->pixels + (size_t)src_y * pt->w
-                   : NULL;
+            src16 ? (const uint16_t *)pt->pixels + (size_t)src_y * pt->w
+                  : NULL;
 
         for (int i = 0; i < dw; i++) {
             int tx = dx + i;
@@ -545,6 +558,23 @@ int SDL_RenderCopyEx(SDL_Renderer *r, SDL_Texture *t, const SDL_Rect *srcrect,
                 } else {
                     picos_unpack565(s, &pr_, &pg, &pb);
                     pa = 255;
+                }
+            } else if (srcLA8) {
+                /* chars/ pics (Task 4): low byte L, high byte A. A==0 is
+                   the transparent sentinel (see PicPxTransparent's LA8
+                   case, pic.c); otherwise A is either a real alpha
+                   (uncommon partial-alpha source pixels) or a "channel
+                   index" (246-254, see blit.c's CharColorTypeAlpha) that
+                   this renderer treats as plain alpha too -- byte-identical
+                   to what the old ARGB8888 branch produced for the same
+                   grey-word-with-channel-alpha chars pixel. */
+                const uint16_t s = src_row16[src_x];
+                const uint32_t a = (s >> 8) & 0xFF;
+                const uint32_t l = s & 0xFF;
+                if (a == 0) {
+                    pa = 0; pr_ = 0; pg = 0; pb = 0;
+                } else {
+                    pa = a; pr_ = pg = pb = l;
                 }
             } else {
                 const uint32_t px = src_row32[src_x];
