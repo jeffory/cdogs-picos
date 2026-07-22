@@ -67,7 +67,7 @@
 #ifdef PICOS
 #include "picos_charcolors.h"
 #else
-#define PicosBlitSetCharColors(colors) ((void)0)
+#define PicosBlitSetCharColors(colors) ((void)(colors))
 #endif
 
 typedef struct
