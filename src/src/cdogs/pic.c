@@ -187,7 +187,8 @@ static void PicChannelSet(uint8_t *channels, const int i, const uint8_t value)
 }
 
 void PicLoad(
-	Pic *p, const struct vec2i size, const struct vec2i offset, const SDL_Surface *image, const bool isHD)
+	Pic *p, const struct vec2i size, const struct vec2i offset, const SDL_Surface *image, const bool isHD,
+	const PicFormat fmt)
 {
 	memset(p, 0, sizeof *p);
 	p->size = size;
@@ -198,7 +199,13 @@ void PicLoad(
 		p->size = svec2i_scale_divide(p->size, 2);
 	}
 	p->offset = svec2i_zero();
+#ifdef PICOS
+	p->fmt = (uint8_t)fmt;
+#else
+	// Desktop has no software RGB565/LA8 rendering path -- every pic stays
+	// ARGB8888 regardless of what the caller asked for.
 	p->fmt = PIC_FMT_ARGB8888;
+#endif
 	CMALLOC(p->Data, (size_t)size.x * size.y * PicPxBytes(p));
 	if (p->Data == NULL)
 	{

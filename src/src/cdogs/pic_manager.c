@@ -62,6 +62,27 @@ void PicManagerInit(PicManager *pm)
 static NamedPic *AddNamedPic(map_t pics, const char *name, const Pic *p);
 static NamedSprites *AddNamedSprites(map_t sprites, const char *name);
 static void AfterAdd(PicManager *pm);
+// Stage 2C-2: chars/ (+ head-part sub-prefixes) and the style-maskable
+// prefixes (wall/tile/door/exits/keys) stay ARGB8888 -- their pixels are
+// still read/recolored as exact 8-bit channels (PicManagerAdd's char
+// conversion below, PicManagerGenerateMaskedPic/GetCharSprites) and RGB565
+// round-tripping breaks the r==g==b greyscale test those paths rely on
+// (see the pic-data survey). Everything else -- menus, UI, HUD, particles,
+// the editor, the "palette" LUT, etc. -- is "final" and halves to RGB565.
+static PicFormat PicManagerClassifyFmt(const char *buf)
+{
+	static const char *const argbPrefixes[] = {
+		"chars/", "wall/", "tile/", "door/", "exits/", "keys/",
+	};
+	for (size_t i = 0; i < sizeof argbPrefixes / sizeof argbPrefixes[0]; i++)
+	{
+		if (strncmp(buf, argbPrefixes[i], strlen(argbPrefixes[i])) == 0)
+		{
+			return PIC_FMT_ARGB8888;
+		}
+	}
+	return PIC_FMT_RGB565;
+}
 static void PicManagerAdd(
 	map_t pics, map_t sprites, const char *name, SDL_Surface *imageIn,
 	const bool isHD)
@@ -98,6 +119,7 @@ static void PicManagerAdd(
 			isSpritesheet = true;
 		}
 	}
+	const PicFormat picFmt = PicManagerClassifyFmt(buf);
 	NamedSprites *nsp = NULL;
 	NamedPic *np = NULL;
 	if (isSpritesheet)
@@ -129,7 +151,7 @@ static void PicManagerAdd(
 			{
 				pic = &np->pic;
 			}
-			PicLoad(pic, size, offset, image, isHD);
+			PicLoad(pic, size, offset, image, isHD, picFmt);
 			if (pic->Data == NULL) continue;
 
 			if (strncmp("chars/", buf, strlen("chars/")) == 0)

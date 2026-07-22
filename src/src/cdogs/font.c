@@ -96,10 +96,12 @@ void FontLoad(
 		{
 			Pic p;
 			// TODO: HD fonts
+			// Font glyphs are always "final" pics (never chars/ or a style
+			// prefix) -- see PicManagerClassifyFmt (pic_manager.c).
 			PicLoad(
 				&p, f->Size,
 				svec2i_add(pos, svec2i(f->Padding.Left, f->Padding.Top)),
-				image, false);
+				image, false, PIC_FMT_RGB565);
 			if (chars == ' ')
 			{
 				PicShrink(&p, spaceSize, svec2i_zero());

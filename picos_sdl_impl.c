@@ -308,8 +308,8 @@ SDL_Texture *SDL_CreateTexture(SDL_Renderer *r, Uint32 format, int access,
    pic_fmt mirrors cdogs' PicFormat enum (pic.h) as a plain uint8_t so this
    SDL shim stays independent of game-engine headers:
      0 = PIC_FMT_ARGB8888, 1 = PIC_FMT_RGB565, 2 = PIC_FMT_LA8.
-   Sub-project 2C converts pics away from ARGB8888 one role at a time; only
-   the ARGB8888 mapping exists so far (RGB565/LA8 arrive in Tasks 2/4). */
+   Sub-project 2C converts pics away from ARGB8888 one role at a time; Task 2
+   adds the RGB565 mapping ("final" pics); LA8 arrives in Task 4. */
 SDL_Texture *PicosTextureBorrow(void *pixels, int w, int h, uint8_t pic_fmt) {
     if (!pixels || w <= 0 || h <= 0) return NULL;
     PicosTexture *t = calloc(1, sizeof(PicosTexture));
@@ -317,6 +317,10 @@ SDL_Texture *PicosTextureBorrow(void *pixels, int w, int h, uint8_t pic_fmt) {
     t->w = w;
     t->h = h;
     switch (pic_fmt) {
+    case 1: /* PIC_FMT_RGB565 */
+        t->fmt = PICOS_TEXFMT_RGB565;
+        t->pitch = w * 2;
+        break;
     case 0: /* PIC_FMT_ARGB8888 */
     default:
         t->fmt = PICOS_TEXFMT_ARGB8888;

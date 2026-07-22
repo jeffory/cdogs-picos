@@ -34,8 +34,10 @@
 
 // Pixel storage format of a Pic's Data buffer.
 // Stage 2C introduces this so individual pics can move off ARGB8888 to save
-// memory; this task (2C-1) keeps every pic ARGB8888 and only routes access
-// through the accessors below, so behaviour is unchanged.
+// memory. Task 2C-2 moves "final" pics (everything that isn't chars/ or a
+// wall|tile|door|exits|keys style pic) to PIC_FMT_RGB565; chars/ and style
+// pics stay PIC_FMT_ARGB8888 until Tasks 3-4. See PicManagerAdd's
+// classification (pic_manager.c) and font.c (always RGB565).
 typedef enum
 {
 	PIC_FMT_ARGB8888 = 0, // 4 B/px -- desktop always; PICOS until converted
@@ -75,7 +77,7 @@ void PicPxCopy(Pic *dst, int di, const Pic *src, int si);  // raw same-format co
 
 void PicLoad(
 	Pic *p, const struct vec2i size, const struct vec2i offset,
-	const SDL_Surface *image, const bool isHD);
+	const SDL_Surface *image, const bool isHD, const PicFormat fmt);
 bool PicTryMakeTex(Pic *p);
 Pic PicCopy(const Pic *src);
 void PicFree(Pic *pic);
