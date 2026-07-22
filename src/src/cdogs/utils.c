@@ -716,14 +716,20 @@ SDL_Surface *LoadImgToSurface(const char *path)
 	   serial console) between decodes. */
 	extern void picos_asset_load_tick(void);
 	picos_asset_load_tick();
-	/* 2.5MB reserve: loaded surfaces spawn same-size texture copies plus
-	   Pic data in PicManagerAdd (all outside this guard), and sounds,
-	   campaign scans, and menus still need to allocate after graphics.
-	   At a 1MB reserve the heap ended at 99.9% full and the app died in
-	   late init. picos_heap_free() is declared in picos_heap.h (included
-	   above) — see that header before touching its semantics. */
+	/* 2.5MB reserve against TRUE free (never-allocated sbrk space plus
+	   newlib's free list — see picos_heap.h). Until sub-project 2B this
+	   guard used the watermark-only picos_heap_free(), which ignores
+	   recycled blocks and so skipped images while real memory was free.
+	   The reserve is now an actual floor, and it must cover everything
+	   that allocates OUTSIDE this guard: each admitted image spawns
+	   Pic->Data (w*h*4, still ARGB8888 until 2C) plus an RGB565 texture
+	   in PicManagerAdd; then sounds, campaign scans, menus — and mission
+	   load, whose per-CharColors sprite cloning is uncapped until 2D.
+	   History: at a 1MB (watermark) reserve the heap ended 99.9% full and
+	   the app died in late init. Retune only against a measured mission
+	   start on hardware, not the simulator (sim heap behaviour differs). */
 	enum { IMG_LOAD_HEAP_RESERVE = 2560 * 1024 };
-	if (picos_heap_free() < IMG_LOAD_HEAP_RESERVE) {
+	if (picos_heap_free_true() < IMG_LOAD_HEAP_RESERVE) {
 		g_picos_img_skip_count++;
 		if (g_picos_img_skip_count <= 5 || g_picos_img_skip_count % 100 == 0) {
 			fprintf(stderr, "LoadImg SKIP #%d (heap reserve): '%s'\n",
