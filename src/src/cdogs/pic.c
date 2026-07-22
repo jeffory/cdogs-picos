@@ -168,27 +168,69 @@ void PicPxCopy(Pic *dst, int di, const Pic *src, int si)
 }
 
 // Number of bytes needed to store a 2-bit-per-pixel Channels map for
-// `count` pixels (4 pixels/byte). Channels is always NULL until Task 3;
-// this sizing is exercised now so PicCopy/PicShrink can't forget an owner.
+// `count` pixels (4 pixels/byte).
 static size_t PicChannelsBytes(const int count)
 {
 	return ((size_t)count + 3) / 4;
 }
-static uint8_t PicChannelGet(const uint8_t *channels, const int i)
+// Raw buffer accessors -- used internally (PicShrink) when working with a
+// bare Channels byte buffer rather than a whole Pic. The public
+// PicChannelGet/PicChannelSet (below) wrap these for external callers
+// (pic_manager.c) and add the NULL-map default / precondition check.
+static uint8_t PicChannelsRawGet(const uint8_t *channels, const int i)
 {
 	return (uint8_t)((channels[i / 4] >> ((i % 4) * 2)) & 0x3);
 }
-static void PicChannelSet(uint8_t *channels, const int i, const uint8_t value)
+static void PicChannelsRawSet(
+	uint8_t *channels, const int i, const uint8_t value)
 {
 	const int byteIdx = i / 4;
 	const int shift = (i % 4) * 2;
 	channels[byteIdx] = (uint8_t)(
 		(channels[byteIdx] & ~(0x3 << shift)) | ((value & 0x3) << shift));
 }
+int PicChannelGet(const Pic *p, int i)
+{
+	if (p->Channels == NULL)
+	{
+		return PIC_CH_LITERAL;
+	}
+	return (int)PicChannelsRawGet(p->Channels, i);
+}
+void PicChannelSet(Pic *p, int i, int ch)
+{
+	CASSERT(p->Channels != NULL, "PicChannelSet on pic with no Channels map");
+	if (p->Channels == NULL)
+	{
+		return;
+	}
+	PicChannelsRawSet(p->Channels, i, (uint8_t)ch);
+}
+// Free just the Channels map, e.g. for a masked-pic output that PicCopy
+// deep-copied a map into but will never be re-masked (a cache lookup by
+// name, never re-fed to PicManagerGenerateMaskedPic). No-op if there is no
+// map. Centralized here (rather than a bare CFREE at the call site) so the
+// byte accounting stays correct without call sites needing to know
+// PicPixelSize's HD-doubling rule.
+void PicChannelsFree(Pic *p)
+{
+	if (p->Channels == NULL)
+	{
+		return;
+	}
+#ifdef PICOS
+	{
+		const struct vec2i psize = PicPixelSize(p);
+		g_picos_pic_data_bytes -= PicChannelsBytes(psize.x * psize.y);
+	}
+#endif
+	CFREE(p->Channels);
+	p->Channels = NULL;
+}
 
 void PicLoad(
 	Pic *p, const struct vec2i size, const struct vec2i offset, const SDL_Surface *image, const bool isHD,
-	const PicFormat fmt)
+	const PicFormat fmt, const bool buildChannelMap)
 {
 	memset(p, 0, sizeof *p);
 	p->size = size;
@@ -211,8 +253,24 @@ void PicLoad(
 	{
 		return;
 	}
+	size_t channelsBytes = 0;
+	if (buildChannelMap)
+	{
+		channelsBytes = PicChannelsBytes(size.x * size.y);
+		CMALLOC(p->Channels, channelsBytes);
+		if (p->Channels == NULL && channelsBytes > 0)
+		{
+			// Mirror the Data-alloc-failure path above: bail out directly,
+			// without going through PicFree (which would decrement
+			// counters that were never incremented for this pic).
+			CFREE(p->Data);
+			p->Data = NULL;
+			return;
+		}
+	}
 #ifdef PICOS
-	g_picos_pic_data_bytes += (size_t)size.x * size.y * PicPxBytes(p);
+	g_picos_pic_data_bytes +=
+		(size_t)size.x * size.y * PicPxBytes(p) + channelsBytes;
 	g_picos_pic_count++;
 	picos_gfx_bytes_peak_sample();
 #endif
@@ -224,6 +282,37 @@ void PicLoad(
 		const Uint32 pixel = ((Uint32 *)image->pixels)[srcI];
 		color_t c;
 		SDL_GetRGBA(pixel, image->format, &c.r, &c.g, &c.b, &c.a);
+		if (p->Channels != NULL)
+		{
+			// Classify on the exact ARGB8888 surface pixel, before any
+			// lossy format conversion -- this is the whole reason the map
+			// exists (RGB565 round-tripping breaks the r==g==b test on
+			// quantized pixels). Precedence matches
+			// PicManagerGenerateMaskedPic's runtime tests exactly (alt
+			// test first): near-black-and-grey -> ALT_GRAY, near-black
+			// (any r) -> ALT, grey -> PRIMARY, else LITERAL. Transparent
+			// (a==0) pixels classify the same way, but their class is
+			// inert: PicManagerGenerateMaskedPic skips pixels where
+			// PicPxTransparent() is true.
+			int ch;
+			if (c.g <= 2 && c.b <= 2 && c.r == c.g && c.g == c.b)
+			{
+				ch = PIC_CH_ALT_GRAY;
+			}
+			else if (c.g <= 2 && c.b <= 2)
+			{
+				ch = PIC_CH_ALT;
+			}
+			else if (c.r == c.g && c.g == c.b)
+			{
+				ch = PIC_CH_PRIMARY;
+			}
+			else
+			{
+				ch = PIC_CH_LITERAL;
+			}
+			PicChannelSet(p, i, ch);
+		}
 		// If completely transparent, replace rgb with black (0) too
 		// This is because transparency blitting checks entire pixel
 		if (c.a == 0)
@@ -343,14 +432,15 @@ Pic PicCopy(const Pic *src)
 	CMALLOC(p.Data, size);
 	memcpy(p.Data, src->Data, size);
 	p.Channels = NULL;
+	size_t channelsSize = 0;
 	if (src->Channels != NULL)
 	{
-		const size_t channelsSize = PicChannelsBytes(psize.x * psize.y);
+		channelsSize = PicChannelsBytes(psize.x * psize.y);
 		CMALLOC(p.Channels, channelsSize);
 		memcpy(p.Channels, src->Channels, channelsSize);
 	}
 #ifdef PICOS
-	g_picos_pic_data_bytes += size;
+	g_picos_pic_data_bytes += size + channelsSize;
 	g_picos_pic_count++;
 	picos_gfx_bytes_peak_sample();
 #endif
@@ -393,6 +483,11 @@ void PicFree(Pic *pic)
 		const struct vec2i dataSize = PicPixelSize(pic);
 		g_picos_pic_data_bytes -=
 			(size_t)dataSize.x * dataSize.y * PicPxBytes(pic);
+		if (pic->Channels != NULL)
+		{
+			g_picos_pic_data_bytes -=
+				PicChannelsBytes(dataSize.x * dataSize.y);
+		}
 		g_picos_pic_count--;
 	}
 #endif
@@ -477,9 +572,9 @@ void PicShrink(Pic *pic, const struct vec2i size, const struct vec2i offset)
 			PicPxCopy(&newPic, dstIdx, pic, srcIdx);
 			if (newChannels != NULL)
 			{
-				PicChannelSet(
+				PicChannelsRawSet(
 					newChannels, dstIdx,
-					PicChannelGet(pic->Channels, srcIdx));
+					PicChannelsRawGet(pic->Channels, srcIdx));
 			}
 		}
 	}
@@ -490,6 +585,15 @@ void PicShrink(Pic *pic, const struct vec2i size, const struct vec2i offset)
 		g_picos_pic_data_bytes -=
 			(size_t)oldSize.x * oldSize.y * PicPxBytes(pic);
 		g_picos_pic_data_bytes += (size_t)size.x * size.y * bpp;
+		if (pic->Channels != NULL)
+		{
+			g_picos_pic_data_bytes -=
+				PicChannelsBytes(oldSize.x * oldSize.y);
+		}
+		if (newChannels != NULL)
+		{
+			g_picos_pic_data_bytes += PicChannelsBytes(size.x * size.y);
+		}
 		picos_gfx_bytes_peak_sample();
 	}
 #endif

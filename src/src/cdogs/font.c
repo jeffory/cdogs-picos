@@ -101,7 +101,7 @@ void FontLoad(
 			PicLoad(
 				&p, f->Size,
 				svec2i_add(pos, svec2i(f->Padding.Left, f->Padding.Top)),
-				image, false, PIC_FMT_RGB565);
+				image, false, PIC_FMT_RGB565, false);
 			if (chars == ' ')
 			{
 				PicShrink(&p, spaceSize, svec2i_zero());

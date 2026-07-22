@@ -62,26 +62,40 @@ void PicManagerInit(PicManager *pm)
 static NamedPic *AddNamedPic(map_t pics, const char *name, const Pic *p);
 static NamedSprites *AddNamedSprites(map_t sprites, const char *name);
 static void AfterAdd(PicManager *pm);
-// Stage 2C-2: chars/ (+ head-part sub-prefixes) and the style-maskable
-// prefixes (wall/tile/door/exits/keys) stay ARGB8888 -- their pixels are
-// still read/recolored as exact 8-bit channels (PicManagerAdd's char
-// conversion below, PicManagerGenerateMaskedPic/GetCharSprites) and RGB565
-// round-tripping breaks the r==g==b greyscale test those paths rely on
-// (see the pic-data survey). Everything else -- menus, UI, HUD, particles,
-// the editor, the "palette" LUT, etc. -- is "final" and halves to RGB565.
-static PicFormat PicManagerClassifyFmt(const char *buf)
+// Stage 2C-3: chars/ (+ head-part sub-prefixes) stays ARGB8888 -- its pixels
+// are read/recolored as exact 8-bit channels at load time right below
+// (PicManagerAdd's char conversion) and again per-frame
+// (PicManagerGetCharSprites), so it needs full precision (Task 4's job to
+// convert). The style-maskable prefixes (wall/tile/door/exits/keys) move to
+// RGB565 + a load-time packed channel map (PicLoad's buildChannelMap):
+// PicManagerGenerateMaskedPic classifies each pixel once, on the exact
+// ARGB8888 surface, and stores the result in Pic::Channels instead of
+// re-deriving it from quantized RGB565 pixels at mask time. Everything else
+// -- menus, UI, HUD, particles, the editor, the "palette" LUT, etc. -- is
+// "final" and halves to RGB565 with no channel map (see the pic-data
+// survey).
+typedef struct
 {
-	static const char *const argbPrefixes[] = {
-		"chars/", "wall/", "tile/", "door/", "exits/", "keys/",
+	PicFormat fmt;
+	bool styleChannelMap;
+} PicFmtClass;
+static PicFmtClass PicManagerClassifyFmt(const char *buf)
+{
+	static const char *const stylePrefixes[] = {
+		"wall/", "tile/", "door/", "exits/", "keys/",
 	};
-	for (size_t i = 0; i < sizeof argbPrefixes / sizeof argbPrefixes[0]; i++)
+	if (strncmp(buf, "chars/", strlen("chars/")) == 0)
 	{
-		if (strncmp(buf, argbPrefixes[i], strlen(argbPrefixes[i])) == 0)
+		return (PicFmtClass){PIC_FMT_ARGB8888, false};
+	}
+	for (size_t i = 0; i < sizeof stylePrefixes / sizeof stylePrefixes[0]; i++)
+	{
+		if (strncmp(buf, stylePrefixes[i], strlen(stylePrefixes[i])) == 0)
 		{
-			return PIC_FMT_ARGB8888;
+			return (PicFmtClass){PIC_FMT_RGB565, true};
 		}
 	}
-	return PIC_FMT_RGB565;
+	return (PicFmtClass){PIC_FMT_RGB565, false};
 }
 static void PicManagerAdd(
 	map_t pics, map_t sprites, const char *name, SDL_Surface *imageIn,
@@ -119,7 +133,7 @@ static void PicManagerAdd(
 			isSpritesheet = true;
 		}
 	}
-	const PicFormat picFmt = PicManagerClassifyFmt(buf);
+	const PicFmtClass picClass = PicManagerClassifyFmt(buf);
 	NamedSprites *nsp = NULL;
 	NamedPic *np = NULL;
 	if (isSpritesheet)
@@ -151,7 +165,9 @@ static void PicManagerAdd(
 			{
 				pic = &np->pic;
 			}
-			PicLoad(pic, size, offset, image, isHD, picFmt);
+			PicLoad(
+				pic, size, offset, image, isHD, picClass.fmt,
+				picClass.styleChannelMap);
 			if (pic->Data == NULL) continue;
 
 			if (strncmp("chars/", buf, strlen("chars/")) == 0)
@@ -664,26 +680,65 @@ static void PicManagerGenerateMaskedPic(
 	Pic *original = PicManagerGetPic(pm, name);
 	if (original == NULL) return;
 
-	// Create the new pic by masking the original pic
+	// Create the new pic by masking the original pic. Classification comes
+	// from the load-time channel map (Pic::Channels, set in PicLoad from
+	// the exact ARGB8888 surface) rather than re-testing quantized RGB565
+	// pixel values here, which would break the r==g==b grey test that
+	// PRIMARY/ALT_GRAY depend on. Precedence and the noAltMask fall-through
+	// reproduce the pre-Task-3 pixel tests exactly (see Amendment A /
+	// pic-data survey ss3-4):
+	//   !noAltMask: ALT, ALT_GRAY -> alt treatment; PRIMARY -> mask;
+	//               LITERAL -> pass through.
+	//   noAltMask:  ALT_GRAY, PRIMARY -> mask; ALT, LITERAL -> pass through.
 	Pic p = PicCopy(original);
 	for (int i = 0; i < p.size.x * p.size.y; i++)
 	{
-		color_t c = PicPx(original, i);
-		// Apply mask based on which channel each pixel is
-		if (c.g <= 2 && c.b <= 2 && !noAltMask)
+		if (PicPxTransparent(original, i))
 		{
-			// Restore to white before masking
-			c.g = c.r;
-			c.b = c.r;
-			c = ColorMult(c, maskAlt);
+			// Already copied as CKEY by PicCopy; masking would be a no-op
+			// anyway (ColorMult keeps alpha at 0), so skip outright.
+			continue;
 		}
-		else if (c.r == c.g && c.g == c.b)
+		const int ch = PicChannelGet(original, i);
+		bool modified = false;
+		color_t c;
+		if (!noAltMask)
 		{
-			c = ColorMult(c, mask);
+			if (ch == PIC_CH_ALT || ch == PIC_CH_ALT_GRAY)
+			{
+				// Restore to white before masking
+				c = PicPx(original, i);
+				c.g = c.r;
+				c.b = c.r;
+				c = ColorMult(c, maskAlt);
+				modified = true;
+			}
+			else if (ch == PIC_CH_PRIMARY)
+			{
+				c = ColorMult(PicPx(original, i), mask);
+				modified = true;
+			}
+			// LITERAL: pass through unmodified (already in p via PicCopy)
 		}
-		PicPxSet(&p, i, c);
+		else
+		{
+			if (ch == PIC_CH_ALT_GRAY || ch == PIC_CH_PRIMARY)
+			{
+				c = ColorMult(PicPx(original, i), mask);
+				modified = true;
+			}
+			// ALT, LITERAL: pass through unmodified
+		}
+		if (modified)
+		{
+			PicPxSet(&p, i, c);
+		}
 		// TODO: more channels
 	}
+	// The output is a final, cached-by-name pic (looked up by
+	// PicManagerGetMaskedPic, never re-masked) -- the Channels map PicCopy
+	// deep-copied from `original` is dead weight here. Free it.
+	PicChannelsFree(&p);
 	if (!PicTryMakeTex(&p))
 	{
 		p.Tex = NULL;

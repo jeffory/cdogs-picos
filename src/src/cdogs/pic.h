@@ -56,6 +56,25 @@ typedef struct
 	SDL_Texture *Tex;
 } Pic;
 
+// Per-pixel classification packed into Pic::Channels (2 bits/px, 4 px/byte),
+// computed once at load time (PicLoad) from the exact ARGB8888 surface
+// pixels, before any lossy format conversion. Lets
+// PicManagerGenerateMaskedPic (pic_manager.c) recover the classification
+// that its RGB565-quantized channel tests can no longer compute correctly
+// after round-tripping through RGB565. Allocated only for style-prefixed
+// pics (wall/tile/door/exits/keys); Channels == NULL elsewhere, in which
+// case every pixel reads as PIC_CH_LITERAL.
+enum
+{
+	PIC_CH_LITERAL = 0,
+	PIC_CH_PRIMARY = 1,
+	PIC_CH_ALT = 2,
+	PIC_CH_ALT_GRAY = 3,
+};
+int PicChannelGet(const Pic *p, int i);
+void PicChannelSet(Pic *p, int i, int ch);
+void PicChannelsFree(Pic *p); // frees/NULLs Channels only, e.g. for masked outputs
+
 color_t PixelToColor(
 	const SDL_PixelFormat *f, const Uint8 aShift, const Uint32 pixel);
 Uint32 ColorToPixel(
@@ -77,7 +96,8 @@ void PicPxCopy(Pic *dst, int di, const Pic *src, int si);  // raw same-format co
 
 void PicLoad(
 	Pic *p, const struct vec2i size, const struct vec2i offset,
-	const SDL_Surface *image, const bool isHD, const PicFormat fmt);
+	const SDL_Surface *image, const bool isHD, const PicFormat fmt,
+	const bool buildChannelMap);
 bool PicTryMakeTex(Pic *p);
 Pic PicCopy(const Pic *src);
 void PicFree(Pic *pic);
