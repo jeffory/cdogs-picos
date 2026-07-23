@@ -30,6 +30,12 @@ static int s_event_tail = 0;
 /* Keyboard state array */
 static Uint8 s_key_state[SDL_NUM_SCANCODES];
 
+/* Deferred release queue for character keys */
+#define PICOS_CHAR_RELEASE_QUEUE_SIZE 8
+static SDL_Scancode s_char_release_queue[PICOS_CHAR_RELEASE_QUEUE_SIZE];
+static int s_char_release_count = 0;
+static bool s_pump_was_idle = true;
+
 /* Static pixel format for ARGB8888 */
 static SDL_PixelFormat s_argb8888_format = {
     .format = SDL_PIXELFORMAT_ARGB8888,
@@ -89,6 +95,8 @@ void picos_sdl_init(const struct PicoCalcAPI *api) {
     memset(&s_renderer, 0, sizeof(s_renderer));
     memset(s_key_state, 0, sizeof(s_key_state));
     s_event_head = s_event_tail = 0;
+    s_char_release_count = 0;  /* Relaunch hygiene */
+    s_pump_was_idle = true;
 }
 
 /* ================================================================
@@ -991,29 +999,12 @@ static SDL_Keycode scancode_to_keycode(SDL_Scancode sc) {
  * SDL_PollEvent sees return false for). No further SDL_PumpEvents calls
  * happen until game_loop.c starts the NEXT frame's EventPoll(), so the
  * first call after an "idle" one is guaranteed to be that next frame's
- * first call -- the correct place to release. Traced end to end: frame N
- * (char arrives) ends with currentKeys[sc] left TRUE (KEYDOWN processed,
- * release deferred past this frame's idle-terminating pump); frame N+1's
- * KeyPrePoll copies that TRUE into previousKeys, its first pump then
- * flushes the KEYUP (currentKeys[sc] -> FALSE), and KeyIsPressed
- * (!KeyIsDown && previousKeys.isPressed) fires on frame N+1 -- a real
- * one-frame press an edge detector observes exactly once.
- *
- * Note on auto-repeat: if the SAME char arrives again on the very frame
- * whose first pump flushes the previous press's KEYUP, that one pump call
- * emits KEYUP then (from the char loop, later in the same call) a fresh
- * KEYDOWN. That is the correct behavior -- release-edge then press-edge in
- * one call -- not a bug to special-case away.
+ * first call -- the correct place to release. The press edge fires in the
+ * ARRIVAL frame's KeyPostPoll (currentKeys true vs previousKeys false); the
+ * deferred KEYUP produces the release edge one frame later. A char
+ * re-arriving on consecutive frames reads as a continuous hold (no second
+ * press edge), by design.
  */
-#define PICOS_CHAR_RELEASE_QUEUE_SIZE 8
-static SDL_Scancode s_char_release_queue[PICOS_CHAR_RELEASE_QUEUE_SIZE];
-static int s_char_release_count = 0;
-/* True iff the previous SDL_PumpEvents call left the event queue empty --
- * see the long comment above for why that's the correct (and only) signal
- * that this call is the first one of a new external frame. Starts true:
- * nothing is queued before the first call ever, so an initial flush
- * attempt is always a harmless no-op. */
-static bool s_pump_was_idle = true;
 
 static void picos_flush_char_release_queue(void) {
     for (int i = 0; i < s_char_release_count; i++) {
