@@ -30,10 +30,15 @@ static int s_event_tail = 0;
 /* Keyboard state array */
 static Uint8 s_key_state[SDL_NUM_SCANCODES];
 
-/* Deferred release queue for character keys */
+/* Deferred release queue for character keys — see the long rationale
+ * comment above SDL_PumpEvents for the frame-boundary model. */
 #define PICOS_CHAR_RELEASE_QUEUE_SIZE 8
 static SDL_Scancode s_char_release_queue[PICOS_CHAR_RELEASE_QUEUE_SIZE];
 static int s_char_release_count = 0;
+/* True iff the previous SDL_PumpEvents call left the event queue empty —
+ * the correct (and only) signal that the next call is the first one of a
+ * new external frame; see SDL_PumpEvents. Starts true: nothing is queued
+ * before the first call ever, so an initial flush attempt is a no-op. */
 static bool s_pump_was_idle = true;
 
 /* Static pixel format for ARGB8888 */
