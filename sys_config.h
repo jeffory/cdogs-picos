@@ -4,7 +4,7 @@
 */
 #pragma once
 
-#define CDOGS_SDL_VERSION "v0.0.1-picos"
+#define CDOGS_SDL_VERSION "v0.1.0-picos"
 
 /* where to look for the cdogs data files */
 #define CDOGS_DATA_DIR "/apps/cdogs/data/"

@@ -115,3 +115,5 @@ Thumbs.db
 .config/
 *.blend1
 emscripten/
+# PicOS port build
+!/Makefile

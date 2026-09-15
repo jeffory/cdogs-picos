@@ -3,9 +3,10 @@
     "name": "C-Dogs",
     "description": "Classic overhead run-and-gun game",
     "type": "native",
-    "version": "0.0.1",
+    "version": "0.1.0",
     "requirements": ["root-filesystem", "audio"],
     "category": "games",
-    "repo": "jeffory/picos-apps",
-    "min_firmware": "1.0.0"
+    "author": "PicOS",
+    "homepage": "https://github.com/jeffory/cdogs-picos",
+    "min_firmware": "0.1.0"
 }
