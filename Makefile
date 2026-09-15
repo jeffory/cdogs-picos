@@ -18,7 +18,8 @@ CFLAGS  = -mcpu=cortex-m33 -mthumb -std=gnu11 \
           -Isrc/src \
           -Isrc/src/cdogs \
           -Isrc/src/cdogs/yajl/api \
-          -DPICOS
+          -DPICOS \
+          -DSTBI_NO_THREAD_LOCALS
 LDFLAGS = -T sdk/native/linker.ld \
           -Wl,--entry=picos_main \
           -Wl,-pie \
